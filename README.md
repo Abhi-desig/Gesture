@@ -130,9 +130,11 @@ A few other things worth knowing:
   preview. The defaults are trackpad-like — you push the current screen out of the
   way — so travelling left brings in the next Space from the right. If that feels
   backwards, swap the two values in `config.json`.
-- **Keep the window visible while gesturing.** It doesn't need focus — put it on a
-  second monitor or beside your work — but browsers suspend camera processing in
-  hidden tabs. The page's *Detection* row tells you when this happens.
+- **It keeps working when you switch apps.** Detection runs in a Web Worker, which
+  browsers don't throttle, so the window needs neither focus nor visibility. The
+  *Detection* row shows a live frame rate so you can confirm it. (See
+  [Always-on detection](#always-on-detection) for why this isn't the obvious
+  implementation.)
 
 ## config.json
 
@@ -238,6 +240,47 @@ a return stroke* are explicit fixtures.
 npm test
 ```
 
+## Always-on detection
+
+The app exists to drive *other* applications, so its own window is almost never the
+visible one — and browsers aggressively suspend hidden pages. Measured on this
+machine with the tab hidden:
+
+| Loop | fps while hidden |
+| --- | --- |
+| `requestAnimationFrame` | 0 |
+| `requestVideoFrameCallback` | 0 |
+| `setInterval` | 1.5 |
+| `setInterval` while playing audio | 1.5 |
+| **`setInterval` inside a Web Worker** | **62.5** |
+
+The usual "keep the tab awake by playing silent audio" trick does nothing here. Only
+workers escape the throttle. Note also that the *camera never stops* — it's the
+page's loop that gets suspended — so the frames are there to be read.
+
+So detection lives in [`public/detector-worker.js`](public/detector-worker.js):
+
+- Frames are read straight off the camera track with `MediaStreamTrackProcessor`,
+  which hands the worker `VideoFrame`s without involving the page's render loop.
+- The track is **cloned** for the worker, because a track processor consumes the
+  track it's given and would otherwise blank the preview.
+- The worker posts landmarks to the main thread, which is unthrottled for message
+  delivery (measured 188 sent, 188 received while hidden) even though its own timers
+  are clamped. So the recognizer and the `fetch` to the server can stay on the main
+  thread, unchanged.
+- It's a **classic** worker, not a module worker: MediaPipe's WASM glue fails with
+  `ModuleFactory not set.` when its ESM bundle is loaded in a worker. `importScripts`
+  of the UMD build works and exposes a `Vision` global.
+
+`MediaStreamTrackProcessor` is Chrome-only, so there's a fallback to the in-page
+`requestVideoFrameCallback` loop. That path genuinely does pause when hidden, and
+says so in the *Detection* row rather than looking broken.
+
+One trap worth knowing if you touch this: a Worker has its own
+`performance.timeOrigin`, so its `performance.now()` is on a different clock than the
+page's. Timestamps are therefore taken on the main thread, and the worker's clock is
+used only for MediaPipe's internal monotonicity requirement and never sent across.
+
 ## Design notes
 
 **The wire protocol carries gesture names, never key combos.** `POST /gesture`
@@ -275,9 +318,10 @@ The page prefers the local copy when it exists. It's gitignored.
 **Gestures fire in the log but nothing happens.** Accessibility access — see
 above. This is the common one.
 
-**Nothing fires at all.** Check the *Detection* row. `paused (tab hidden)` means
-the window isn't visible. `off` means the camera isn't started. Also check you're
-armed.
+**Nothing fires at all.** Check the *Detection* row. It should read `running` with a
+frame rate in the 20–60 range. `off` means the camera isn't started; `stalled` means
+frames stopped arriving; `paused (tab hidden)` means you're on the fallback path in a
+browser without `MediaStreamTrackProcessor` — use Chrome. Also check you're armed.
 
 **Swipes don't register.** Watch *Palm speed* while you swipe. If it stays under
 `swipeMinVelocity` you're moving too slowly for a deliberate gesture; either swipe
