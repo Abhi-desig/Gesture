@@ -1,8 +1,10 @@
 // Camera -> hand landmarks -> gesture -> POST /gesture.
+//
+// I/O only. Every gesture decision lives in recognizer.js, which is unit tested;
+// this file drives the camera, paints the overlay, and talks to the server.
 
-import { classifyPose } from './gestures.js';
 import { toPoints } from './landmarks.js';
-import { SwipeTracker } from './swipe.js';
+import { Recognizer } from './recognizer.js';
 
 const TASKS_VISION_URL =
   'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs';
@@ -10,6 +12,10 @@ const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/was
 const CDN_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const LOCAL_MODEL_URL = './models/hand_landmarker.task';
+
+// How long a fired gesture stays shown in the Pose row. Swipes are instantaneous,
+// so without this they'd flash for a single frame and be unreadable.
+const RECENT_MS = 900;
 
 const CONNECTIONS = [
   [0, 1], [1, 2], [2, 3], [3, 4],
@@ -30,17 +36,17 @@ const el = {
   banner: document.getElementById('banner'),
   bindingsBody: document.getElementById('bindings-body'),
   log: document.getElementById('log'),
+  detection: document.getElementById('r-detection'),
   pose: document.getElementById('r-pose'),
   held: document.getElementById('r-held'),
   velocity: document.getElementById('r-velocity'),
   fourFinger: document.getElementById('r-fourfinger'),
   rearm: document.getElementById('r-rearm'),
   backend: document.getElementById('r-backend'),
-  detection: document.getElementById('r-detection'),
 };
 
 const ctx = el.canvas.getContext('2d');
-const tracker = new SwipeTracker();
+const recognizer = new Recognizer();
 
 const state = {
   armed: false,
@@ -48,43 +54,20 @@ const state = {
   landmarker: null,
   config: null,
   configRaw: '',
-  // The current continuous run of one static pose. One fire per run when
-  // requireReleaseBetweenFires is on, which is what stops a held fist from
-  // machine-gunning its shortcut every cooldown window.
-  run: { pose: null, frames: 0, fired: false },
-  lastFired: new Map(),
-  velocity: 0,
-  fourFinger: false,
-  swipeArmed: true,
-  handPresent: false,
+  view: null,
+  recent: null,
+  recentAt: 0,
 };
 
 // ---------------------------------------------------------------- config
 
-// Used until /config arrives. Without a fallback, an undefined confirmFrames
-// would make `frames < confirmFrames` false and fire a pose on its first frame.
-const FALLBACK_TUNING = {
-  confirmFrames: 4,
-  cooldownMs: 1200,
-  requireReleaseBetweenFires: true,
-  stillnessMaxVelocity: 0.8,
-};
-
 function tuning() {
-  return state.config?.tuning ?? FALLBACK_TUNING;
+  return state.config?.tuning ?? recognizer.tuning;
 }
 
 function applyConfig(config) {
   state.config = config;
-  const t = config.tuning;
-  tracker.setOptions({
-    windowMs: t.swipeWindowMs,
-    minTravel: t.swipeMinTravel,
-    minVelocity: t.swipeMinVelocity,
-    maxVerticalRatio: t.swipeMaxVerticalRatio,
-    rearmRequiresPoseBreak: t.swipeRearmRequiresPoseBreak,
-    invertDirection: t.invertSwipeDirection,
-  });
+  recognizer.setTuning(config.tuning);
   renderBindings();
 }
 
@@ -148,6 +131,7 @@ async function loadHealth() {
     const health = await res.json();
     el.backend.textContent = health.backend;
     el.backend.className = health.backend === 'dryrun' ? 'off' : 'on';
+
     if (health.backend === 'dryrun') {
       showBanner(
         'No keyboard backend loaded.',
@@ -221,6 +205,8 @@ async function send(name) {
 
 /** Detected gestures are silently dropped while disarmed — no log spam. */
 function onGestureDetected(name) {
+  state.recent = name;
+  state.recentAt = performance.now();
   if (!state.armed) return;
   send(name);
 }
@@ -235,65 +221,25 @@ function simulate(name) {
 
 // ---------------------------------------------------------------- detection
 
-function considerPose(pose, now) {
-  const t = tuning();
-  if (pose !== state.run.pose) state.run = { pose, frames: 0, fired: false };
-  state.run.frames += 1;
-
-  if (!pose) return;
-  if (state.run.frames < t.confirmFrames) return;
-  if (t.requireReleaseBetweenFires && state.run.fired) return;
-
-  const previous = state.lastFired.get(pose) ?? -Infinity;
-  if (now - previous < t.cooldownMs) return;
-
-  state.lastFired.set(pose, now);
-  state.run.fired = true;
-  onGestureDetected(pose);
-}
-
 function handleResult(result, now) {
   const landmarks = result.landmarks?.[0];
+  const pts = landmarks
+    ? toPoints(landmarks, el.video.videoWidth / el.video.videoHeight)
+    : null;
 
-  if (!landmarks) {
-    tracker.handLost();
-    considerPose(null, now);
-    state.handPresent = false;
-    state.velocity = 0;
-    state.fourFinger = false;
-    state.swipeArmed = tracker.armed;
-    draw(null);
-    updateReadout();
-    return;
-  }
+  const view = recognizer.update(pts, now);
+  state.view = view;
 
-  state.handPresent = true;
-  const aspect = el.video.videoWidth / el.video.videoHeight;
-  const pts = toPoints(landmarks, aspect);
+  if (view.gesture) onGestureDetected(view.gesture);
 
-  const motion = tracker.update(pts, now);
-  state.velocity = motion.velocity;
-  state.fourFinger = motion.fourFinger;
-  state.swipeArmed = motion.armed;
-
-  if (motion.swipe) {
-    // A swipe supersedes any pose reading for this frame, and resets the pose run
-    // so the hand settling afterwards doesn't immediately count as a held pose.
-    state.run = { pose: null, frames: 0, fired: false };
-    onGestureDetected(motion.swipe);
-    draw(landmarks, 'swipe');
-    updateReadout(motion.swipe);
-    return;
-  }
-
-  // Stillness gate. Without this a swipe would trip the open-palm binding on its
-  // way across the frame, since the two hand shapes are near-identical.
-  const pose = classifyPose(pts);
-  const still = state.velocity <= tuning().stillnessMaxVelocity;
-  considerPose(still ? pose : null, now);
-
-  draw(landmarks, still ? 'still' : 'moving');
+  draw(landmarks, drawMode(view));
   updateReadout();
+}
+
+function drawMode(view) {
+  if (view.gesture) return 'swipe';
+  if (view.velocity > tuning().stillnessMaxVelocity) return 'moving';
+  return 'still';
 }
 
 // ---------------------------------------------------------------- rendering
@@ -337,8 +283,8 @@ function set(node, text, cls = '') {
 /**
  * Detection only runs while the page is being rendered: browsers suspend both
  * requestVideoFrameCallback and requestAnimationFrame in hidden tabs. Since this
- * app exists to drive *other* applications, that state is easy to hit by
- * accident, and silently detecting nothing is the worst way to express it. A
+ * app exists to drive *other* applications, that state is easy to hit by accident,
+ * and silently detecting nothing is the worst way to express it. A
  * visible-but-unfocused window is fine — only genuinely hidden stops the loop.
  */
 function detectionStatus() {
@@ -348,42 +294,47 @@ function detectionStatus() {
   return ['running', 'on'];
 }
 
-function updateReadout(swipe) {
+function updateReadout() {
   const t = tuning();
+  const view = state.view;
   set(el.detection, ...detectionStatus());
 
-  if (swipe) {
-    set(el.pose, swipe, 'on');
-  } else if (!state.handPresent) {
-    set(el.pose, 'no hand', 'off');
+  const recentActive = state.recent && performance.now() - state.recentAt < RECENT_MS;
+  if (recentActive) {
+    set(el.pose, state.recent, 'on');
+  } else if (!view?.handPresent) {
+    set(el.pose, state.cameraOn ? 'no hand' : '—', 'off');
   } else {
-    set(el.pose, state.run.pose ?? '—', state.run.pose ? 'on' : 'off');
+    set(el.pose, view.pose ?? '—', view.pose ? 'on' : 'off');
   }
 
-  const frames = state.run.pose ? `${state.run.frames}/${t.confirmFrames}` : '—';
-  set(el.held, frames, state.run.fired ? 'on' : '');
+  set(
+    el.held,
+    view?.pose ? `${view.frames}/${t.confirmFrames}` : '—',
+    view?.fired ? 'on' : '',
+  );
 
-  if (!state.handPresent) {
+  if (!view?.handPresent) {
     set(el.velocity, '—', 'off');
   } else {
-    const moving = state.velocity > (t.stillnessMaxVelocity ?? 0.8);
+    const moving = view.velocity > t.stillnessMaxVelocity;
     set(
       el.velocity,
-      `${state.velocity.toFixed(2)} / ${t.stillnessMaxVelocity}`,
+      `${view.velocity.toFixed(2)} / ${t.stillnessMaxVelocity}`,
       moving ? 'moving' : '',
     );
   }
 
   set(
     el.fourFinger,
-    state.handPresent ? (state.fourFinger ? 'yes' : 'no') : '—',
-    state.fourFinger ? 'on' : 'off',
+    view?.handPresent ? (view.fourFinger ? 'yes' : 'no') : '—',
+    view?.fourFinger ? 'on' : 'off',
   );
-  set(
-    el.rearm,
-    state.swipeArmed ? 'ready' : 'curl fingers',
-    state.swipeArmed ? 'on' : 'off',
-  );
+
+  // Both guards are cleared by the same user action — curl your fingers — so they
+  // share one row rather than confusing the reader with two.
+  const blocked = view ? !view.swipeArmed || view.poseSuppressed : false;
+  set(el.rearm, blocked ? 'curl fingers' : 'ready', blocked ? 'off' : 'on');
 }
 
 // ---------------------------------------------------------------- camera
@@ -445,6 +396,8 @@ function scheduleFrame() {
 function onFrame() {
   if (!state.cameraOn) return;
 
+  // videoWidth is 0 until the first frame arrives, and MediaPipe rejects a
+  // zero-area region of interest outright.
   if (el.video.readyState >= 2 && el.video.videoWidth > 0) {
     if (el.canvas.width !== el.video.videoWidth) {
       el.canvas.width = el.video.videoWidth;
@@ -454,8 +407,9 @@ function onFrame() {
     if (el.video.currentTime !== lastVideoTime) {
       lastVideoTime = el.video.currentTime;
 
-      // detectForVideo throws on a timestamp that doesn't strictly increase,
-      // which is the usual reason one of these pages dies a second after start.
+      // detectForVideo throws INVALID_ARGUMENT on a timestamp that doesn't
+      // strictly increase, which is the usual reason a page like this dies a
+      // second after starting.
       const ts = Math.max(performance.now(), lastTimestamp + 1);
       lastTimestamp = ts;
 
@@ -507,6 +461,7 @@ async function startCamera() {
     return;
   }
 
+  recognizer.reset();
   state.cameraOn = true;
   el.stageMsg.hidden = true;
   el.cameraBtn.disabled = false;
@@ -518,11 +473,13 @@ function stopCamera() {
   state.cameraOn = false;
   for (const track of el.video.srcObject?.getTracks() ?? []) track.stop();
   el.video.srcObject = null;
-  tracker.reset();
-  state.run = { pose: null, frames: 0, fired: false };
-  state.handPresent = false;
+
+  recognizer.reset();
+  state.view = null;
+  state.recent = null;
   draw(null);
   updateReadout();
+
   el.cameraBtn.textContent = 'Start camera';
   el.stageMsg.hidden = false;
   el.stageMsg.textContent = 'Camera is off.';
@@ -557,10 +514,9 @@ document.addEventListener('visibilitychange', () => {
       document.hidden ? 'detection paused — this tab is hidden' : 'detection resumed',
       'note',
     );
-    // Start the next run from scratch: a pose held across the gap shouldn't count
-    // its pre-hide frames toward confirmFrames. The swipe buffer self-heals, since
-    // stale samples fall outside the window on the first frame back.
-    state.run = { pose: null, frames: 0, fired: false };
+    // Start fresh: a pose held across the gap shouldn't count its pre-hide frames
+    // toward confirmFrames.
+    recognizer.reset();
   }
   updateReadout();
 });
@@ -569,5 +525,5 @@ await pollConfig();
 await loadHealth();
 setInterval(pollConfig, 3000);
 // Keeps the detection status honest even when no frames are arriving to drive it.
-setInterval(() => updateReadout(), 1000);
+setInterval(updateReadout, 1000);
 updateReadout();

@@ -82,10 +82,13 @@ export async function create() {
     },
 
     async press(combo) {
-      const codes = resolve(combo);
-      await keyboard.pressKey(...codes);
-      // Release in reverse so modifiers outlive the key they modify.
-      await keyboard.releaseKey(...[...codes].reverse());
+      // `type` rather than the more obvious pressKey/releaseKey pair: this libnut
+      // build rejects a modifier combined with a non-character key through
+      // pressKey — `pressKey(LeftControl, Right)` throws "Invalid key flag
+      // specified", which would break every swipe binding — while `type` taps the
+      // same combination correctly. It also presses and releases in one call, so
+      // there's no chance of leaving a modifier stuck down if the release throws.
+      await keyboard.type(...resolve(combo));
     },
   };
 }
