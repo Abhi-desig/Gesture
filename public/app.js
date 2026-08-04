@@ -200,12 +200,10 @@ async function send(name) {
       logEntry(`${name} -> ${data.shortcut} (dry-run)`, 'skipped');
     } else {
       logEntry(`${name} failed: ${data.error ?? res.status}`, 'failed');
-      if (res.status === 500) {
-        showBanner(
-          'The key press failed.',
-          'On macOS, grant this terminal Accessibility access: System Settings > Privacy & Security > Accessibility. Key presses fail silently without it.',
-          true,
-        );
+      if (res.status === 503) {
+        showBanner('macOS is discarding key presses.', `${data.help} Then reload this page.`, true);
+      } else if (res.status === 500) {
+        showBanner('The key press failed.', data.error ?? 'see the server console', true);
       }
     }
   } catch (err) {

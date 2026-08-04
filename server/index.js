@@ -134,6 +134,25 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
     });
   }
 
+  // nut.js does NOT throw when macOS discards the event for lack of Accessibility
+  // access — it logs a warning and resolves. Reporting `fired: true` in that case
+  // is a lie that sends people hunting through Keyboard Shortcuts and gesture
+  // thresholds while the actual cause is one toggle in System Settings. Checked
+  // per press because the permission can be revoked while the server runs.
+  const access = await checkAccessibility();
+  if (access.granted === false) {
+    lastFired.delete(name);
+    console.error(`${name} -> ${binding.combo} NOT pressed: Accessibility access denied`);
+    return res.status(503).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: binding.combo,
+      error: 'macOS is discarding key presses: Accessibility access is not granted',
+      help: ACCESSIBILITY_HELP,
+    });
+  }
+
   try {
     await backend.press(binding.parsed);
     console.log(`${name} -> ${binding.combo}`);
@@ -159,13 +178,17 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
 
 app.get('/config', (_req, res) => res.json(config.clientPayload()));
 
-app.get('/health', (_req, res) => {
+app.get('/health', async (_req, res) => {
+  // Re-checked per request, never cached. Accessibility can be revoked while the
+  // server runs, and a stale "authorized" is actively misleading: it points the
+  // user away from the one setting that is actually stopping their key presses.
   res.json({
     ok: true,
     backend: backend.name,
     backendReason: backend.reason,
     dryRun: config.current.settings.dryRun,
-    accessibility,
+    accessibility: await checkAccessibility(),
+    accessibilityAtStartup: accessibility,
     accessibilityHelp: ACCESSIBILITY_HELP,
     boundGestures: Object.keys(config.current.gestures),
   });
