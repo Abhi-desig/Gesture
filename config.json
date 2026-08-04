@@ -6,9 +6,15 @@
     "swipe_left": "ctrl+right",
     "swipe_right": "ctrl+left"
   },
+
+  "holdMs": {
+    "default": 180,
+    "open_palm": 1200
+  },
+
   "cooldownMs": 1200,
-  "confirmFrames": 4,
   "requireReleaseBetweenFires": true,
+
   "stillnessMaxVelocity": 0.8,
   "swipeWindowMs": 350,
   "swipeMinTravel": 1.2,
@@ -16,6 +22,7 @@
   "swipeMaxVerticalRatio": 0.5,
   "swipeRearmRequiresPoseBreak": true,
   "invertSwipeDirection": false,
+
   "backend": "auto",
   "dryRun": false,
   "port": 4321

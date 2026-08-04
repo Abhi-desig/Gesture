@@ -62,7 +62,7 @@ independently of hand tracking.
 | ------------ | ---------------------------------------- | --------------- | ------------------- |
 | `fist`       | all fingers curled                       | `audio_play`    | pause/play music    |
 | `pinch`      | thumb and index tip together             | `cmd+shift+a`   | mute mic (Zoom)     |
-| `open_palm`  | all five out, **held still**             | `cmd+ctrl+q`    | lock screen         |
+| `open_palm`  | all five out, **still for 1.2s**         | `cmd+ctrl+q`    | lock screen         |
 | `swipe_left` | four fingers out, hand travels **left**  | `ctrl+right`    | next Space          |
 | `swipe_right`| four fingers out, hand travels **right** | `ctrl+left`     | previous Space      |
 
@@ -90,18 +90,46 @@ If a gesture shows `-> shortcut` in the Activity log but nothing happens, the
 detection worked and the *binding* has no listener — look at this list, not at your
 hand.
 
-A few things worth knowing about how these behave:
+### How to make a swipe
 
-- **Open palm vs. swipe is decided by motion, not by your thumb.** An open hand
-  held still locks the screen; the same hand swept sideways switches Spaces. The
-  thumb is the least reliable of the 21 landmarks, so it never decides anything on
-  its own.
+The swipe is the fussiest gesture, because a swipe is a *motion* while the other
+three are *poses*. Concretely:
+
+1. **Four fingers extended.** Thumb wherever — it's ignored.
+2. **Move your whole hand sideways, briskly.** Your palm needs to cover about
+   **1.2 palm-widths** (roughly 10–12 cm) within **350 ms**. That's a flick, not a
+   drift. This is what people get wrong first: a slow, careful sweep registers as
+   nothing at all.
+3. **Keep it level.** Vertical movement must stay under half the horizontal
+   movement, so a diagonal wave is rejected.
+4. **Curl your fingers afterwards** to re-arm before the next swipe.
+
+Watch **Palm speed** on the page while you try it — it shows your current speed
+next to the threshold, so you can see which side of the line you're on. If your
+swipes are honest and still not registering, lower `swipeMinTravel` toward `0.8`.
+
+### Why the open palm and the swipe fight each other
+
+The swipe pose — four fingers out — is a **subset** of the open-palm pose. There's
+no hand shape that is one and not the other, so all three phases of a swipe collide
+with `open_palm`, and each needs its own guard:
+
+| Phase | Problem | Guard |
+| --- | --- | --- |
+| **Before** | Getting into position means holding a stationary open palm | `open_palm` needs a deliberate **1200 ms** hold (`holdMs`) |
+| **During** | The moving hand still matches `open_palm` | Static poses ignored above `stillnessMaxVelocity` |
+| **After** | The swipe *ends* in the swipe pose, so resting matches `open_palm` | Static poses suppressed until the pose is broken |
+
+Miss any one and a swipe locks your screen. If `open_palm` still fires when you
+meant to swipe, either start moving sooner after raising your hand, or raise its
+`holdMs` further.
+
+A few other things worth knowing:
+
 - **Swipe direction is the direction your hand travels**, matching the mirrored
   preview. The defaults are trackpad-like — you push the current screen out of the
   way — so travelling left brings in the next Space from the right. If that feels
   backwards, swap the two values in `config.json`.
-- **Between swipes, curl your fingers.** Otherwise the return stroke of your hand
-  would fire the opposite swipe and undo the one you just made.
 - **Keep the window visible while gesturing.** It doesn't need focus — put it on a
   second monitor or beside your work — but browsers suspend camera processing in
   hidden tabs. The page's *Detection* row tells you when this happens.
@@ -111,14 +139,17 @@ A few things worth knowing about how these behave:
 ```json
 {
   "gestures": {
-    "fist": "space",
-    "pinch": "cmd+shift+m",
+    "fist": "audio_play",
+    "pinch": "cmd+shift+a",
     "open_palm": "cmd+ctrl+q",
     "swipe_left": "ctrl+right",
     "swipe_right": "ctrl+left"
   },
+  "holdMs": {
+    "default": 180,
+    "open_palm": 1200
+  },
   "cooldownMs": 1200,
-  "confirmFrames": 4,
   "requireReleaseBetweenFires": true,
   "stillnessMaxVelocity": 0.8,
   "swipeWindowMs": 350,
@@ -156,16 +187,15 @@ Shortcuts are parsed when the config loads, so a typo is reported immediately wi
 the gesture name attached instead of failing silently the first time you make that
 gesture. An invalid file is rejected whole and the previous config stays live.
 
-> `fist: "space"` only pauses music if the player has focus. `audio_play` is the
-> system-wide media key and works regardless of what's focused — but it needs the
-> `nutjs` backend, since System Events can't send media keys.
+> The `audio_*` media keys need the `nutjs` backend — System Events, and therefore
+> the `osascript` fallback, cannot synthesize them.
 
 ### Tuning
 
 | Setting | Meaning |
 | --- | --- |
 | `cooldownMs` | Minimum gap between two fires of the same gesture. |
-| `confirmFrames` | Frames a static pose must hold before it counts. Swipes bypass this. |
+| `holdMs` | How long a pose must be held, in ms. A number applies to all; an object like `{ "default": 180, "open_palm": 1200 }` sets it per gesture. Swipes bypass this. |
 | `requireReleaseBetweenFires` | Change pose before the same one can fire again. |
 | `stillnessMaxVelocity` | Above this palm speed, static poses are ignored. |
 | `swipeWindowMs` | How far back swipe travel is measured. |
@@ -254,8 +284,9 @@ armed.
 harder or lower the threshold. If *Swipe ready* says `curl fingers`, you're still
 in the previous swipe's pose.
 
-**Open palm locks the screen when I meant to swipe.** Raise
-`stillnessMaxVelocity`, or start moving before your fingers are fully extended.
+**Open palm locks the screen when I meant to swipe.** You're holding the pose too
+long before moving — raise `holdMs.open_palm` above 1200, or start the sweep sooner
+after your hand comes up. See *Why the open palm and the swipe fight each other*.
 
 **The wrong direction.** Set `invertSwipeDirection: true` — some virtual cameras
 deliver an already-mirrored stream.

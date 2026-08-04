@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { POSES } from '../public/gestures.js';
+import { DEFAULT_HOLD_MS } from '../public/recognizer.js';
 import { SWIPES } from '../public/swipe.js';
 import { BACKEND_NAMES } from './backends/index.js';
 import { formatShortcut, parseShortcut } from './shortcut.js';
@@ -21,7 +22,6 @@ export const KNOWN_GESTURES = [...POSES, ...SWIPES];
 
 const NUMBERS = {
   cooldownMs: { default: 1200, min: 0, max: 60000 },
-  confirmFrames: { default: 4, min: 1, max: 60 },
   stillnessMaxVelocity: { default: 0.8, min: 0, max: 100 },
   swipeWindowMs: { default: 350, min: 50, max: 5000 },
   swipeMinTravel: { default: 1.2, min: 0.1, max: 20 },
@@ -43,9 +43,55 @@ const BOOLEANS = {
 const RESERVED = new Set([
   'gestures',
   'backend',
+  'holdMs',
   ...Object.keys(NUMBERS),
   ...Object.keys(BOOLEANS),
 ]);
+
+const HOLD_MS_LIMITS = { min: 0, max: 10000 };
+
+/**
+ * `holdMs` is either a single number or a per-gesture map with a `default` key:
+ *
+ *   "holdMs": 180
+ *   "holdMs": { "default": 180, "open_palm": 1200 }
+ *
+ * The map form exists because the swipe pose is a subset of the open-palm pose, so
+ * open_palm needs a longer deliberate hold than the other poses to stay out of the
+ * way of swipes.
+ */
+function validateHoldMs(raw, errors) {
+  const value = raw.holdMs ?? { ...DEFAULT_HOLD_MS };
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value) || value < HOLD_MS_LIMITS.min || value > HOLD_MS_LIMITS.max) {
+      errors.push(`"holdMs" must be between ${HOLD_MS_LIMITS.min} and ${HOLD_MS_LIMITS.max}ms`);
+      return null;
+    }
+    return value;
+  }
+
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    errors.push('"holdMs" must be a number, or an object like { "default": 180, "open_palm": 1200 }');
+    return null;
+  }
+
+  const out = {};
+  for (const [key, ms] of Object.entries(value)) {
+    if (typeof ms !== 'number' || !Number.isFinite(ms) || ms < HOLD_MS_LIMITS.min || ms > HOLD_MS_LIMITS.max) {
+      errors.push(`"holdMs.${key}" must be a number between ${HOLD_MS_LIMITS.min} and ${HOLD_MS_LIMITS.max}`);
+      continue;
+    }
+    if (key !== 'default' && !KNOWN_GESTURES.includes(key)) {
+      errors.push(`"holdMs.${key}" is not a gesture — expected "default" or one of ${KNOWN_GESTURES.join(', ')}`);
+      continue;
+    }
+    out[key] = ms;
+  }
+
+  if (out.default === undefined) out.default = DEFAULT_HOLD_MS.default;
+  return out;
+}
 
 /**
  * Pull the gesture map out of a raw config object.
@@ -102,6 +148,9 @@ export function validate(raw) {
       settings[name] = value;
     }
   }
+
+  const holdMs = validateHoldMs(raw, errors);
+  if (holdMs !== null) settings.holdMs = holdMs;
 
   const backend = raw.backend ?? 'auto';
   if (!BACKEND_NAMES.includes(backend)) {
@@ -230,7 +279,7 @@ export class ConfigStore {
       knownGestures: KNOWN_GESTURES,
       dryRun: settings.dryRun,
       tuning: {
-        confirmFrames: settings.confirmFrames,
+        holdMs: settings.holdMs,
         cooldownMs: settings.cooldownMs,
         requireReleaseBetweenFires: settings.requireReleaseBetweenFires,
         stillnessMaxVelocity: settings.stillnessMaxVelocity,

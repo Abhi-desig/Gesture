@@ -160,7 +160,10 @@ export function motionStream({
   dx = 0,
   dy = 0,
   scale = 0.12,
-  start = { x: 0.5, y: 0.6 },
+  // Matches buildHand's default origin, so a stream can be concatenated with a
+  // stationary hold without an accidental vertical jump between the two — which
+  // would trip the swipe detector's horizontal-dominance check.
+  start = { x: 0.5, y: 0.75 },
   startT = 1000,
 } = {}) {
   const out = [];

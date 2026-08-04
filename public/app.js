@@ -308,9 +308,11 @@ function updateReadout() {
     set(el.pose, view.pose ?? '—', view.pose ? 'on' : 'off');
   }
 
+  // Shown as elapsed/required so a pose that needs a long deliberate hold (open_palm
+  // defaults to 1200ms) visibly fills up rather than seeming not to work.
   set(
     el.held,
-    view?.pose ? `${view.frames}/${t.confirmFrames}` : '—',
+    view?.pose ? `${Math.round(view.heldMs)}/${view.holdMs}ms` : '—',
     view?.fired ? 'on' : '',
   );
 
@@ -514,8 +516,8 @@ document.addEventListener('visibilitychange', () => {
       document.hidden ? 'detection paused — this tab is hidden' : 'detection resumed',
       'note',
     );
-    // Start fresh: a pose held across the gap shouldn't count its pre-hide frames
-    // toward confirmFrames.
+    // Start fresh: a pose held across the gap shouldn't count the hidden time
+    // toward its hold duration.
     recognizer.reset();
   }
   updateReadout();
