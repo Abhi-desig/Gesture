@@ -1,0 +1,21 @@
+{
+  "name": "gesture",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Watch your hand through the webcam and run keyboard shortcuts on your machine.",
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node server/index.js",
+    "test": "node --test \"test/*.test.js\"",
+    "fetch-model": "node scripts/fetch-model.js"
+  },
+  "dependencies": {
+    "@nut-tree-fork/node-mac-permissions": "^2.2.1",
+    "@nut-tree-fork/nut-js": "^4.2.6",
+    "express": "^5.2.1"
+  }
+}
