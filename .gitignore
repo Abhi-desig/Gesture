@@ -1,0 +1,11 @@
+node_modules/
+
+# Local machine state, not project config
+.claude/settings.local.json
+
+# Vendored MediaPipe model (7.8 MB) — fetch with `npm run fetch-model`
+public/models/*.task
+
+.DS_Store
+*.log
+npm-debug.log*

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>gesture</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <header>
+      <h1>gesture</h1>
+      <p class="sub">Hand gestures to keyboard shortcuts, via a local server.</p>
+    </header>
+
+    <div id="banner" class="banner" hidden></div>
+
+    <main>
+      <section class="stage-col">
+        <div class="stage">
+          <div class="mirror">
+            <video id="video" playsinline muted></video>
+            <canvas id="overlay"></canvas>
+          </div>
+          <div id="stage-msg" class="stage-msg">Camera is off.</div>
+        </div>
+
+        <div class="controls">
+          <button id="camera-btn" class="btn">Start camera</button>
+          <button id="arm-btn" class="btn arm" aria-pressed="false">
+            <span class="dot"></span><span id="arm-label">Disarmed</span>
+          </button>
+        </div>
+        <p class="hint">
+          Nothing is sent to the server while disarmed. Arming works without the
+          camera, so the test buttons can be used on their own.
+          <br />Detection runs in a background worker, so it keeps working while
+          you're in other apps — this window doesn't need focus or even to be
+          visible. Watch the <em>Detection</em> row to confirm.
+          Press <kbd>Esc</kbd> to disarm.
+        </p>
+      </section>
+
+      <section class="panel">
+        <h2>Live</h2>
+        <dl class="readout">
+          <dt>Detection</dt>
+          <dd id="r-detection">off</dd>
+          <dt>Pose</dt>
+          <dd id="r-pose">—</dd>
+          <dt>Held</dt>
+          <dd id="r-held">—</dd>
+          <dt>Palm speed</dt>
+          <dd id="r-velocity">—</dd>
+          <dt>Swipe pose</dt>
+          <dd id="r-fourfinger">—</dd>
+          <dt>Swipe ready</dt>
+          <dd id="r-rearm">—</dd>
+          <dt>Backend</dt>
+          <dd id="r-backend">—</dd>
+        </dl>
+
+        <h2>Bindings</h2>
+        <table class="bindings">
+          <tbody id="bindings-body"></tbody>
+        </table>
+        <p class="hint">
+          Edit <code>config.json</code> to change these. The server reloads it on
+          save — no restart.
+        </p>
+
+        <h2>Activity</h2>
+        <ul id="log" class="log">
+          <li class="empty">Nothing yet.</li>
+        </ul>
+      </section>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
