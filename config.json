@@ -1,7 +1,7 @@
 {
   "gestures": {
-    "fist": "space",
-    "pinch": "cmd+shift+m",
+    "fist": "audio_play",
+    "pinch": "cmd+shift+a",
     "open_palm": "cmd+ctrl+q",
     "swipe_left": "ctrl+right",
     "swipe_right": "ctrl+left"

@@ -60,11 +60,35 @@ independently of hand tracking.
 
 | Gesture      | Hand                                     | Default binding | Does                |
 | ------------ | ---------------------------------------- | --------------- | ------------------- |
-| `fist`       | all fingers curled                       | `space`         | pause/play music    |
-| `pinch`      | thumb and index tip together             | `cmd+shift+m`   | mute mic            |
+| `fist`       | all fingers curled                       | `audio_play`    | pause/play music    |
+| `pinch`      | thumb and index tip together             | `cmd+shift+a`   | mute mic (Zoom)     |
 | `open_palm`  | all five out, **held still**             | `cmd+ctrl+q`    | lock screen         |
 | `swipe_left` | four fingers out, hand travels **left**  | `ctrl+right`    | next Space          |
 | `swipe_right`| four fingers out, hand travels **right** | `ctrl+left`     | previous Space      |
+
+### Not every shortcut is equal — this is the main gotcha
+
+The server presses keys; **something has to be listening.** Bindings fall into three
+kinds, and only the first works with no setup at all:
+
+1. **macOS built-ins** — `cmd+ctrl+q` (lock screen) and `ctrl+←`/`ctrl+→` (switch
+   Spaces). System-wide, always listening. The Spaces ones need **Keyboard →
+   Keyboard Shortcuts → Mission Control → Move left/right a space** enabled (on by
+   default) and more than one Space to exist.
+2. **Media keys** — `audio_play`, `audio_mute`, `audio_next`, `audio_vol_up`… These
+   go to whatever owns media playback regardless of focus, which is why `fist` uses
+   `audio_play` rather than `space`. A plain `space` is *not* a shortcut: it's
+   delivered to the frontmost app, so it only pauses music if the music app is
+   focused — and it won't be, because you'll be looking at this page.
+3. **App shortcuts** — need that app to be listening. macOS ships **no** global
+   mic-mute shortcut, so `pinch` uses Zoom's: set **Zoom → Settings → Keyboard
+   Shortcuts → Mute/Unmute My Audio → Enable Global Shortcut** (`cmd+shift+a`).
+   Without that checkbox Zoom only hears it while focused. Teams uses
+   `cmd+shift+m` natively, focused only.
+
+If a gesture shows `-> shortcut` in the Activity log but nothing happens, the
+detection worked and the *binding* has no listener — look at this list, not at your
+hand.
 
 A few things worth knowing about how these behave:
 
