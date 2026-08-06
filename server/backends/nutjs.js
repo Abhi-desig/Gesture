@@ -4,6 +4,21 @@
 // its prebuilt binaries moved behind a paid subscription, so this is the
 // maintained Apache-2.0 community fork. `libnut` underneath is an N-API module,
 // which is why the prebuilt binary keeps working across Node major versions.
+//
+// KNOWN LIMITATION — this backend cannot switch Spaces, and cannot be fixed to.
+// libnut's `toggleKeyCode` calls CGEventCreateKeyboardEvent, CGEventSetFlags and
+// CGEventPost; `nm` on libnut.node shows no CGEventSetType at all, which is the
+// only way to turn a keyboard event into a kCGEventFlagsChanged. So a modifier
+// is only ever a flag bit on the key event and the WindowServer's global
+// modifier state is never updated. Applications read flags off the event and are
+// satisfied — which is why ctrl+right navigates inside Chrome — but macOS
+// matches symbolic hotkeys like Mission Control's "Move left/right a space"
+// against that global state, so the desktop never moves.
+//
+// Sequencing the modifier by hand (pressKey(LeftControl) then pressKey(Right))
+// does not help: pressing a modifier alone posts a plain kCGEventKeyDown for
+// keycode 59, which is not a modifier state change either. See
+// backends/cgevent.js, which posts the flagsChanged pair the WindowServer needs.
 
 const MODIFIERS = {
   cmd: 'LeftCmd',

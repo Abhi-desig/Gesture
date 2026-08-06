@@ -229,3 +229,49 @@ test('tuning can be swapped at runtime, as config hot-reload does', () => {
   const view = r.update(buildHand({ pose: 'fist' }), 1016);
   assert.equal(view.gesture, 'fist', 'a zero hold fires as soon as the frame floor is met');
 });
+
+test('a pose recognized while disarmed leaves no cooldown residue', () => {
+  // The page drops gestures while disarmed, but the recognizer used to record
+  // them as fired anyway. That burned the pose's cooldown *and*, with
+  // requireReleaseBetweenFires on, demanded a full pose break — so a fist made
+  // between "Start camera" and "Arm" silently ate the first real gesture.
+  const r = new Recognizer();
+
+  const disarmed = [];
+  for (const { pts, t } of hold({ pose: 'fist', ms: 400, startT: 1000 })) {
+    const view = r.update(pts, t, false);
+    if (view.gesture) disarmed.push(view.gesture);
+  }
+
+  // Still reported, because the live readout has to show what it can see.
+  assert.ok(disarmed.length > 0, 'the pose should still be recognized while disarmed');
+  assert.ok(disarmed.every((g) => g === 'fist'));
+  assert.equal(r.lastFired.get('fist'), undefined, 'nothing should be recorded as fired');
+  assert.equal(r.run.fired, false, 'the one-fire-per-run slot should be untouched');
+});
+
+test('the first armed gesture after a disarmed one still fires', () => {
+  // The end-to-end version of the above: hold a fist while disarmed, keep
+  // holding it, arm, and it must still fire. No pose break, no cooldown wait.
+  const r = new Recognizer();
+  const stream = hold({ pose: 'fist', ms: 800, startT: 1000 });
+  const half = Math.floor(stream.length / 2);
+
+  for (const { pts, t } of stream.slice(0, half)) r.update(pts, t, false);
+
+  const fired = [];
+  for (const { pts, t } of stream.slice(half)) {
+    const view = r.update(pts, t, true);
+    if (view.gesture) fired.push(view.gesture);
+  }
+
+  assert.deepEqual(fired, ['fist'], 'arming mid-hold should fire exactly once');
+});
+
+test('an armed pose still fires only once', () => {
+  // Guards the obvious way to get the above wrong: skipping the bookkeeping
+  // unconditionally rather than only while disarmed.
+  const r = new Recognizer();
+  assert.deepEqual(run(r, hold({ pose: 'fist', ms: 800 })), ['fist']);
+  assert.ok(r.lastFired.get('fist') > 0);
+});

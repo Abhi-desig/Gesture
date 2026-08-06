@@ -26,6 +26,10 @@ const MODIFIER_ALIASES = {
 const MODIFIER_ORDER = ['cmd', 'ctrl', 'alt', 'shift'];
 
 const KEY_ALIASES = {
+  spaceleft: 'space_left',
+  spaceright: 'space_right',
+  'prev_space': 'space_left',
+  'next_space': 'space_right',
   return: 'enter',
   esc: 'escape',
   arrowup: 'up',
@@ -80,7 +84,17 @@ const NAMED_KEYS = new Set([
   'audio_prev',
   'audio_vol_up',
   'audio_vol_down',
+
+  // Not keys at all — actions. macOS refuses Space navigation from synthesized
+  // keystrokes, so "move a Space" cannot be expressed as ctrl+arrow and be
+  // expected to work; a backend has to post the Dock's trackpad gesture
+  // instead. Naming the intent rather than the chord lets it.
+  'space_left',
+  'space_right',
 ]);
+
+/** Actions that describe intent rather than a keystroke, so take no modifiers. */
+const ACTIONS = new Set(['space_left', 'space_right']);
 
 for (let i = 1; i <= 12; i += 1) NAMED_KEYS.add(`f${i}`);
 
@@ -144,6 +158,13 @@ export function parseShortcut(input) {
   const key = normalizeKey(keyToken);
   if (!key) {
     throw new Error(`"${raw}" has unknown key "${keyToken}"`);
+  }
+
+  if (ACTIONS.has(key) && modifiers.size > 0) {
+    throw new Error(
+      `"${raw}" combines modifiers with "${key}", which is an action rather than a key. ` +
+        `Use "${key}" on its own.`,
+    );
   }
 
   return {

@@ -3,9 +3,16 @@ node_modules/
 # Local machine state, not project config
 .claude/settings.local.json
 
-# Vendored MediaPipe model (7.8 MB) — fetch with `npm run fetch-model`
+# Vendored MediaPipe, ~31 MB all told — fetch with `npm run fetch-model`
 public/models/*.task
+public/vendor/
+
+# Compiled Swift key-sending helper — build with `npm run build:native`
+native/build/
 
 .DS_Store
 *.log
 npm-debug.log*
+
+# Written by scripts/keysend-probe.mjs
+probe-result.json
