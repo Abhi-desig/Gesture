@@ -65,15 +65,57 @@ fn find_project_root(app: &tauri::AppHandle) -> Option<PathBuf> {
         }
     }
 
+    // Deep enough to escape a dev bundle, whose exe sits eight directories
+    // inside the repo: src-tauri/target/release/bundle/macos/Gesture.app/
+    // Contents/MacOS/gesture.
     let exe = std::env::current_exe().ok()?;
     let mut dir = exe.parent()?.to_path_buf();
-    for _ in 0..6 {
+    for _ in 0..10 {
         if dir.join("server/index.js").is_file() {
             return Some(dir);
         }
         dir = dir.parent()?.to_path_buf();
     }
     None
+}
+
+/// Find a Node binary the way a *GUI* process has to.
+///
+/// An app launched from Finder or at login inherits launchd's PATH —
+/// /usr/bin:/bin:/usr/sbin:/sbin — which contains none of the places people
+/// actually install Node. `Command::new("node")` therefore works from a
+/// terminal and silently fails from a double-click, which is the worst kind of
+/// works-on-my-machine. GESTURE_NODE overrides the search.
+fn find_node() -> Option<PathBuf> {
+    if let Ok(node) = std::env::var("GESTURE_NODE") {
+        let path = PathBuf::from(node);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    let candidates = [
+        "/opt/homebrew/bin/node", // Homebrew on Apple silicon
+        "/usr/local/bin/node",    // Homebrew on Intel, and the pkg installer
+        "/usr/bin/node",
+    ];
+    for candidate in candidates {
+        let path = PathBuf::from(candidate);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+
+    // Fall back to PATH for the terminal-launched case, plus nvm-style setups
+    // where the shell profile is the only thing that knows the location.
+    which_on_path("node")
+}
+
+fn which_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|dir| dir.join(name))
+        .find(|candidate| candidate.is_file())
 }
 
 /// Start the Node server, unless one is already running.
@@ -95,15 +137,27 @@ fn start_server(app: &tauri::AppHandle) -> Option<Child> {
         }
     };
 
-    println!("gesture: starting the server from {}", root.display());
-    match Command::new("node")
+    let node = match find_node() {
+        Some(node) => node,
+        None => {
+            eprintln!("gesture: no node binary found — set GESTURE_NODE to its path");
+            return None;
+        }
+    };
+
+    println!(
+        "gesture: starting {} server/index.js from {}",
+        node.display(),
+        root.display()
+    );
+    match Command::new(&node)
         .arg("server/index.js")
         .current_dir(&root)
         .spawn()
     {
         Ok(child) => Some(child),
         Err(err) => {
-            eprintln!("gesture: could not start node ({err}). Is node on PATH?");
+            eprintln!("gesture: could not start {} ({err})", node.display());
             None
         }
     }
