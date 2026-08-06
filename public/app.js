@@ -865,5 +865,28 @@ await loadHealth();
 setInterval(pollConfig, 3000);
 // Keeps the detection status honest even when no frames are arriving to drive it.
 setInterval(updateReadout, 1000);
+
+// Heartbeat: while the camera is on, tell the server every 2s that this page's
+// main thread is alive, what the frame rate is, and whether the page thinks it
+// is visible. This exists to make "gestures die when the window is hidden"
+// diagnosable from GET /recent alone: heartbeats that stop mean the main thread
+// was suspended; heartbeats that continue with a collapsing fps mean the worker
+// stopped receiving camera frames; heartbeats and fps both healthy mean the
+// pipeline is fine and the problem is at or past the gesture POST.
+setInterval(() => {
+  if (!state.cameraOn) return;
+  fetch('/heartbeat', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      fps: Math.round(state.fps * 10) / 10,
+      mode: state.mode,
+      armed: state.armed,
+      visibility: document.visibilityState,
+      msSinceFrame: Math.round(msSinceFrame()),
+    }),
+    // A diagnostics channel must never become the thing that breaks.
+  }).catch(() => {});
+}, 2000);
 setInterval(superviseDetection, WATCHDOG_INTERVAL_MS);
 updateReadout();

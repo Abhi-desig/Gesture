@@ -158,6 +158,43 @@ async function verifySpaceMoved(before) {
   };
 }
 
+/**
+ * A ring of recent page activity, for diagnosing "works in view, dead in the
+ * background" without anyone having to watch two windows at once.
+ *
+ * The page heartbeats every couple of seconds with its frame rate and
+ * visibility, and every gesture POST lands here with its outcome. Reading
+ * GET /recent after a background test then answers, from one place: was the
+ * page's main thread still running? were camera frames still flowing? did the
+ * gesture reach the server at all, and what did the server do with it?
+ */
+const RECENT_LIMIT = 200;
+const recent = [];
+
+function remember(event) {
+  recent.push({ t: new Date().toISOString(), ...event });
+  if (recent.length > RECENT_LIMIT) recent.shift();
+}
+
+app.post('/heartbeat', sameOriginOnly, (req, res) => {
+  const b = req.body ?? {};
+  remember({
+    type: 'heartbeat',
+    // Whitelisted rather than spread: this is a loopback diagnostics channel,
+    // not a place to let a page store arbitrary payloads.
+    fps: typeof b.fps === 'number' ? b.fps : null,
+    mode: typeof b.mode === 'string' ? b.mode : null,
+    armed: b.armed === true,
+    visibility: typeof b.visibility === 'string' ? b.visibility : null,
+    msSinceFrame: typeof b.msSinceFrame === 'number' ? Math.round(b.msSinceFrame) : null,
+  });
+  res.json({ ok: true });
+});
+
+app.get('/recent', (_req, res) => {
+  res.json({ now: new Date().toISOString(), events: recent });
+});
+
 app.post('/gesture', sameOriginOnly, async (req, res) => {
   const { gestures, settings } = config.current;
   const name = req.body?.gesture;
@@ -187,6 +224,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   const previous = lastFired.get(name) ?? -Infinity;
   const waited = now - previous;
   if (waited < settings.cooldownMs) {
+    remember({ type: 'gesture', gesture: name, outcome: 'cooldown' });
     return res.status(429).json({
       ok: true,
       fired: false,
@@ -202,6 +240,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   lastFired.set(name, now);
 
   if (settings.dryRun) {
+    remember({ type: 'gesture', gesture: name, outcome: 'dryRun' });
     console.log(`[dry-run] ${name} -> ${binding.combo}`);
     return res.json({
       ok: true,
@@ -219,6 +258,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   // per press because the permission can be revoked while the server runs.
   const access = await checkAccessibility();
   if (access.granted === false) {
+    remember({ type: 'gesture', gesture: name, outcome: 'accessibility-denied' });
     lastFired.delete(name);
     console.error(`${name} -> ${binding.combo} NOT pressed: Accessibility access denied`);
     return res.status(503).json({
@@ -242,6 +282,14 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
     await backend.press(binding.parsed);
 
     const space = await verifySpaceMoved(watchSpaces);
+    remember({
+      type: 'gesture',
+      gesture: name,
+      outcome: 'pressed',
+      ...(space
+        ? { space: space.moved && space.held ? 'moved' : space.moved ? 'reverted' : 'no-move' }
+        : {}),
+    });
     if (space?.moved && space.held) {
       console.log(`${name} -> ${binding.combo}  (space ${space.from} -> ${space.to})`);
     } else if (space?.moved) {
@@ -283,6 +331,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
         : {}),
     });
   } catch (err) {
+    remember({ type: 'gesture', gesture: name, outcome: 'error', error: err.message });
     lastFired.delete(name); // a failed press shouldn't burn the cooldown
     console.error(`failed to press ${binding.combo} for ${name}: ${err.message}`);
     return res.status(500).json({
