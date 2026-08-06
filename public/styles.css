@@ -353,3 +353,57 @@ kbd {
   display: block;
   margin-bottom: 3px;
 }
+
+/* ------------------------------------------------------------- pill mode
+   Tauri only. The window itself is shrunk to a small always-on-top strip and
+   this element becomes the entire UI; everything else is display:none. The
+   window must stay *visible* — WKWebView freezes requestVideoFrameCallback for
+   any hidden page, and with no MediaStreamTrackProcessor in WebKit there is no
+   worker path to keep detection alive the way Chrome does. */
+
+#pill {
+  display: none;
+}
+
+body.pill {
+  padding: 0;
+  overflow: hidden;
+}
+
+body.pill header,
+body.pill main,
+body.pill .banner {
+  display: none;
+}
+
+body.pill #pill {
+  position: fixed;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  font-size: 13px;
+  color: var(--dim);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.pill-dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--bad);
+}
+
+body.pill.pill-armed #pill {
+  color: var(--text);
+}
+
+body.pill.pill-armed .pill-dot {
+  background: var(--live);
+}

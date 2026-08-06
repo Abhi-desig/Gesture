@@ -181,6 +181,10 @@ fn wait_for_server(timeout: Duration) -> bool {
 
 fn show_main_window(app: &tauri::AppHandle) {
     if let Some(window) = app.get_webview_window("main") {
+        // The page may currently be the pill; let it restore its own geometry
+        // first, then show/focus regardless so a wedged page cannot make the
+        // window unreachable.
+        let _ = window.eval("window.__gesturePillExit && window.__gesturePillExit()");
         let _ = window.show();
         let _ = window.set_focus();
     }
@@ -276,14 +280,29 @@ pub fn run() {
 
             // ------------------------------------------------- window & server
             if let Some(window) = app.get_webview_window("main") {
-                // Closing the window puts the app in the menu bar rather than
-                // quitting it. Detection is supposed to keep running while you
-                // work; quitting on close would make that impossible to express.
-                let hide_target = window.clone();
+                // Closing the window must not quit — detection is supposed to
+                // keep running while you work — but it must not plain-hide
+                // either: WKWebView stops feeding camera frames to a hidden
+                // page, and this webview has no worker path to survive that.
+                // The page decides: camera running -> shrink to the pill;
+                // camera off -> hide itself. Rust only hides directly when the
+                // page cannot be reached at all.
+                let close_target = window.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
                         api.prevent_close();
-                        let _ = hide_target.hide();
+                        // The fallback lives inside the script: eval() only
+                        // reports whether the script was queued, so a page
+                        // without these hooks must hide itself.
+                        let handed_off = close_target
+                            .eval(
+                                "if (window.__gestureCloseRequested) { window.__gestureCloseRequested(); } \
+                                 else if (window.__TAURI__) { window.__TAURI__.window.getCurrentWindow().hide(); }",
+                            )
+                            .is_ok();
+                        if !handed_off {
+                            let _ = close_target.hide();
+                        }
                     }
                 });
             }
