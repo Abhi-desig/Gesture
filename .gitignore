@@ -16,3 +16,7 @@ npm-debug.log*
 
 # Written by scripts/keysend-probe.mjs
 probe-result.json
+
+# Tauri
+src-tauri/target/
+src-tauri/gen/

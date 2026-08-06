@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- Merged into the generated Info.plist by tauri-bundler. Every key here is
+       load-bearing; macOS kills the app outright if it touches one of these
+       subsystems without the matching usage string. -->
+
+  <!-- The webcam the whole app is built around. Without this the app is
+       terminated the moment getUserMedia is called, with no prompt. -->
+  <key>NSCameraUsageDescription</key>
+  <string>Gesture watches your hand through the webcam to recognise gestures. Video never leaves your Mac.</string>
+
+  <!-- Space switching drives System Events via osascript. Without this the
+       Automation prompt never appears and the call fails with error 1002 —
+       which is exactly the failure this project already spent a long time
+       chasing from the other direction. -->
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Gesture asks System Events to switch between desktops when you swipe.</string>
+
+  <!-- A menu-bar app, not a Dock app: LSUIElement keeps it out of the Dock and
+       the app switcher so it can sit in the background. The window is still
+       shown and focused normally when opened from the tray. -->
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>

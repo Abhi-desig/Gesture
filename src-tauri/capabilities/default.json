@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Minimal by design: the page talks to the Node server over HTTP and uses no Tauri IPC, so it is granted nothing. The tray, autostart and server lifecycle are all driven from Rust, where capabilities do not apply.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}

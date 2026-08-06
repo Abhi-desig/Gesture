@@ -15,6 +15,52 @@ editing that file — the server picks it up on save, no restart and no code cha
 browser: camera -> landmarks -> gesture name  --POST-->  server: shortcut -> key press
 ```
 
+## Desktop app (Tauri)
+
+A thin native shell lives in [`src-tauri/`](src-tauri). It adds the three things a
+browser tab cannot do — a menu bar item, start-at-login, and staying alive with
+no window — while the recogniser and the key pressing stay exactly as they are.
+
+```bash
+npm run app:dev     # run it
+npm run app:build   # produce Gesture.app
+```
+
+Needs a Rust toolchain (<https://rustup.rs>) on top of the normal setup.
+
+**How it fits together.** The shell starts `node server/index.js` as a child
+process and points a webview at `http://127.0.0.1:4321` — the same page you'd
+open in a browser. Nothing in `public/` or `server/` changes. Loading over
+`http://127.0.0.1` rather than bundled assets keeps the page same-origin with the
+server it POSTs to, and keeps it on an origin macOS treats as a secure context,
+which `getUserMedia` requires. If a server is already listening, the app attaches
+to it instead of starting a second one, so `npm start` in a terminal and the app
+remain interchangeable.
+
+Closing the window hides it to the menu bar rather than quitting — detection is
+meant to keep running while you work. **Quit Gesture** in the tray menu is the
+way out, and it kills the server it started.
+
+**The permissions move with it.** The Accessibility grant follows the
+*responsible* app, so once you run the bundled app it is `Gesture` that needs
+ticking, not your editor. `Info.plist` also declares `NSCameraUsageDescription`
+and `NSAppleEventsUsageDescription`; the second is what lets the Automation
+prompt appear for the `osascript` Space strategy, and without it Space switching
+fails with error 1002.
+
+**Known risk — the camera in the webview.** macOS `getUserMedia` inside a
+WKWebView is the subject of open Tauri bugs
+([wry#1195](https://github.com/tauri-apps/wry/issues/1195),
+[tauri#11951](https://github.com/tauri-apps/tauri/issues/11951)), and this app is
+a camera app. Verify it before building anything else on top: run
+`npm run app:dev` and click **Start camera**. The tray has an **Open in Browser…**
+item as the fallback — the same page works in Chrome, and the menu bar,
+auto-launch and background behaviour are unaffected either way.
+
+Bundling the Node runtime into the `.app` is **not** solved yet: a built app
+still expects `node` on `PATH` and the project directory present. Set
+`GESTURE_ROOT` if it cannot find `server/index.js`.
+
 ## Requirements
 
 - **Node 22 or newer** (developed on 26.4)
