@@ -1,10 +1,10 @@
 {
   "gestures": {
     "fist": "audio_play",
-    "pinch": "escape",
+    "pinch": "ctrl+up",
     "open_palm": "cmd+ctrl+q",
-    "swipe_left": "ctrl+right",
-    "swipe_right": "ctrl+left"
+    "swipe_left": "space_right",
+    "swipe_right": "space_left"
   },
   "holdMs": {
     "default": 180,
@@ -20,6 +20,13 @@
   "swipeRearmRequiresPoseBreak": true,
   "invertSwipeDirection": false,
   "backend": "auto",
+  "keysendSource": "hid",
+  "spaceStrategy": "osascript",
+  "dockSwipeVariant": "iss",
+  "dockSwipeVelocity": 400,
+  "dockSwipeLingerMs": 300,
+  "dockSwipeWithTap": true,
+  "verifySpaceSwitch": true,
   "dryRun": false,
   "port": 4321
 }

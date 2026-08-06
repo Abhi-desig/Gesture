@@ -100,8 +100,13 @@ export class Recognizer {
    * @param {{x:number,y:number}[]|null} pts Aspect-corrected points, or null/empty
    *   when no hand is in view.
    * @param {number} now Monotonic ms.
+   * @param {boolean} canFire Whether a recognized pose will actually be acted on.
+   *   False while the page is disarmed. Recognition still runs — the readout has
+   *   to stay live — but nothing is *recorded* as having fired, because a pose
+   *   made between "Start camera" and "Arm" would otherwise consume its own
+   *   cooldown and its one-fire-per-run slot for a key press that never happened.
    */
-  update(pts, now) {
+  update(pts, now, canFire = true) {
     if (!pts || pts.length < 21) {
       this.tracker.handLost();
       this.#advanceRun(null, now);
@@ -126,12 +131,12 @@ export class Recognizer {
     const still = motion.velocity <= this.tuning.stillnessMaxVelocity;
     const pose = still && !this.poseSuppressed ? classifyPose(pts) : null;
 
-    const gesture = this.#advanceRun(pose, now);
+    const gesture = this.#advanceRun(pose, now, canFire);
     return this.#view({ handPresent: true, motion, gesture, now });
   }
 
   /** Track the pose run and decide whether it should fire. */
-  #advanceRun(pose, now = 0) {
+  #advanceRun(pose, now = 0, canFire = true) {
     if (pose !== this.run.pose) this.run = { pose, frames: 0, fired: false, startedAt: now };
     this.run.frames += 1;
 
@@ -142,6 +147,13 @@ export class Recognizer {
 
     const previous = this.lastFired.get(pose) ?? -Infinity;
     if (now - previous < this.tuning.cooldownMs) return null;
+
+    // Report it either way — the caller wants it for the readout — but only
+    // record the fire when it will actually be sent. Recording while disarmed
+    // burns this pose's cooldown, and with requireReleaseBetweenFires on it also
+    // demands a full pose break before the pose can fire again, so the first
+    // real gesture after arming would be dropped.
+    if (!canFire) return pose;
 
     this.lastFired.set(pose, now);
     this.run.fired = true;

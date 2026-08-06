@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -48,16 +49,18 @@ test('deduplicates repeated modifiers', () => {
 });
 
 test('parses the shipped default bindings', () => {
-  const defaults = {
-    fist: 'space',
-    pinch: 'cmd+shift+m',
-    open_palm: 'cmd+ctrl+q',
-    swipe_left: 'ctrl+right',
-    swipe_right: 'ctrl+left',
-  };
-  for (const [gesture, combo] of Object.entries(defaults)) {
+  // Read from config.json rather than a copy. The copy that used to live here
+  // had drifted — it still asserted `fist: space` and `pinch: cmd+shift+m`,
+  // neither of which had been the default for some time — so the one test whose
+  // job was to catch a broken shipped binding could not have caught one.
+  const shipped = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
+  const bindings = Object.entries(shipped.gestures);
+
+  assert.ok(bindings.length > 0, 'config.json should ship some bindings');
+  for (const [gesture, combo] of bindings) {
     assert.doesNotThrow(() => parseShortcut(combo), `${gesture}: ${combo}`);
   }
+
   assert.deepEqual(parseShortcut('ctrl+right'), {
     modifiers: ['ctrl'],
     key: 'right',
@@ -100,4 +103,23 @@ test('knownKeys covers letters, digits and named keys', () => {
   for (const expected of ['a', 'z', '0', '9', 'space', 'right', 'f12', 'audio_play']) {
     assert.ok(keys.includes(expected), `missing ${expected}`);
   }
+});
+
+test('space_left / space_right parse as actions, not key chords', () => {
+  // macOS refuses Space navigation from synthesized keystrokes, so "move a
+  // Space" cannot be spelled ctrl+arrow and be expected to work. These name the
+  // intent instead, and a backend posts the Dock's trackpad gesture for them.
+  assert.deepEqual(parseShortcut('space_right'), {
+    modifiers: [],
+    key: 'space_right',
+    raw: 'space_right',
+  });
+  assert.equal(parseShortcut('next_space').key, 'space_right');
+  assert.equal(parseShortcut('prev_space').key, 'space_left');
+});
+
+test('an action cannot take modifiers', () => {
+  // "cmd+space_right" is meaningless — there is no chord to modify — and
+  // silently ignoring the modifier would hide the misunderstanding.
+  assert.throws(() => parseShortcut('cmd+space_right'), /action rather than a key/);
 });

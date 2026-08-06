@@ -28,6 +28,10 @@ const NUMBERS = {
   swipeMinVelocity: { default: 3.0, min: 0, max: 100 },
   swipeMaxVerticalRatio: { default: 0.5, min: 0.01, max: 10 },
   port: { default: 4321, min: 1, max: 65535 },
+  // Dock-swipe tuning, for the space_left/space_right actions. See KEYSEND_SOURCES
+  // above for why any of this is configurable rather than compiled in.
+  dockSwipeVelocity: { default: 400, min: 1, max: 100000 },
+  dockSwipeLingerMs: { default: 300, min: 0, max: 10000 },
 };
 
 const BOOLEANS = {
@@ -35,7 +39,37 @@ const BOOLEANS = {
   swipeRearmRequiresPoseBreak: true,
   invertSwipeDirection: false,
   dryRun: false,
+  // After pressing a Space-switching chord, read com.apple.spaces back and say
+  // whether the desktop actually moved. On by default: "the log says it fired
+  // and nothing happened" is the single most expensive way to debug this.
+  //
+  // It costs a short poll of the preferences domain, and only on ctrl+left and
+  // ctrl+right. A switch that works is detected on the first or second read; the
+  // full ~600ms wait is only paid when nothing moved, which is exactly the case
+  // worth spending it on.
+  verifySpaceSwitch: true,
+  // Hold a session event tap while posting the gesture. Both reference
+  // implementations do; whether the WindowServer requires it is measured, not
+  // assumed — `npm run probe:keysend -- --swipe-only`.
+  dockSwipeWithTap: true,
 };
+
+/** Dock-swipe field layouts. See native/keysend.swift for what differs. */
+export const DOCK_SWIPE_VARIANTS = ['iss', 'mmf'];
+
+/** How space_left/space_right are performed. See backends/cgevent.js. */
+export const SPACE_STRATEGIES = ['osascript', 'direct', 'dockswipe'];
+
+/**
+ * Which CGEventSource state table the native helper attributes its events to.
+ *
+ * Only meaningful for the cgevent backend. It is a setting rather than a
+ * constant because the whole fix turns on the WindowServer seeing a modifier go
+ * down globally, and which state table it honours for symbolic hotkeys is an
+ * empirical question — `npm run probe:keysend` sends the same chord through each
+ * and reports which one moved the Space.
+ */
+export const KEYSEND_SOURCES = ['hid', 'combined', 'private', 'null'];
 
 // Setting names, so the flat-shorthand reader can tell a gesture binding from a
 // tunable. `backend` matters most here: it's the one string-valued setting, so
@@ -43,12 +77,29 @@ const BOOLEANS = {
 const RESERVED = new Set([
   'gestures',
   'backend',
+  'keysendSource',
+  'spaceStrategy',
+  'dockSwipeVariant',
   'holdMs',
   ...Object.keys(NUMBERS),
   ...Object.keys(BOOLEANS),
 ]);
 
 const HOLD_MS_LIMITS = { min: 0, max: 10000 };
+
+/**
+ * The page's panic chord: a bare Escape one-way disarms it (see app.js).
+ *
+ * Binding a gesture to this is self-defeating in a way that is genuinely hard to
+ * diagnose. The gesture page is normally the frontmost window — you are watching
+ * the readout — so the Escape the server presses lands on the page itself and
+ * silently disarms it. Every later gesture is then dropped with no error
+ * anywhere, which reads as "it worked for a while and then stopped".
+ */
+const PANIC_CHORD = { modifiers: [], key: 'escape' };
+
+const isPanicChord = (parsed) =>
+  parsed.key === PANIC_CHORD.key && parsed.modifiers.length === 0;
 
 /**
  * `holdMs` is either a single number or a per-gesture map with a `default` key:
@@ -159,6 +210,33 @@ export function validate(raw) {
     settings.backend = backend;
   }
 
+  const spaceStrategy = raw.spaceStrategy ?? 'osascript';
+  if (!SPACE_STRATEGIES.includes(spaceStrategy)) {
+    errors.push(
+      `"spaceStrategy" must be one of ${SPACE_STRATEGIES.join(', ')} (got ${JSON.stringify(raw.spaceStrategy)})`,
+    );
+  } else {
+    settings.spaceStrategy = spaceStrategy;
+  }
+
+  const dockSwipeVariant = raw.dockSwipeVariant ?? 'iss';
+  if (!DOCK_SWIPE_VARIANTS.includes(dockSwipeVariant)) {
+    errors.push(
+      `"dockSwipeVariant" must be one of ${DOCK_SWIPE_VARIANTS.join(', ')} (got ${JSON.stringify(raw.dockSwipeVariant)})`,
+    );
+  } else {
+    settings.dockSwipeVariant = dockSwipeVariant;
+  }
+
+  const keysendSource = raw.keysendSource ?? 'hid';
+  if (!KEYSEND_SOURCES.includes(keysendSource)) {
+    errors.push(
+      `"keysendSource" must be one of ${KEYSEND_SOURCES.join(', ')} (got ${JSON.stringify(raw.keysendSource)})`,
+    );
+  } else {
+    settings.keysendSource = keysendSource;
+  }
+
   const gestures = {};
   let rawGestures;
   try {
@@ -171,7 +249,15 @@ export function validate(raw) {
   for (const [name, combo] of Object.entries(rawGestures)) {
     try {
       const parsed = parseShortcut(combo);
-      gestures[name] = { combo: formatShortcut(parsed), parsed };
+      if (isPanicChord(parsed)) {
+        errors.push(
+          `gesture "${name}" is bound to "escape", which is the gesture page's panic ` +
+            'disarm. Firing it would disarm the page — every later gesture would be ' +
+            'silently dropped. Use a different shortcut, or add a modifier.',
+        );
+      } else {
+        gestures[name] = { combo: formatShortcut(parsed), parsed };
+      }
     } catch (err) {
       errors.push(`gesture "${name}": ${err.message}`);
     }

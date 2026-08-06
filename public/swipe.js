@@ -116,16 +116,25 @@ export class SwipeTracker {
 
   #evaluate() {
     const o = this.options;
-    if (this.samples.length < 3) return null;
+    if (this.poseHeldSince === null) return null;
 
-    const a = this.samples[0];
-    const b = this.samples[this.samples.length - 1];
+    // Only travel accumulated while the pose was actually held may count, so
+    // motion from before the fingers came up can't contribute to a swipe.
+    //
+    // Evaluated on a *slice* of the window rather than by discarding the window
+    // whole. Samples are pushed on every hand-present frame, not only four-finger
+    // ones, so requiring the oldest sample in the buffer to already be in-pose
+    // meant waiting for every pre-pose sample to age out — a full windowMs of
+    // holding four fingers still before any movement could register. Raising the
+    // hand and swiping in one motion could never fire, which is why the first
+    // gesture of a run was always swallowed and the second one worked.
+    const win = this.samples.filter((s) => s.t >= this.poseHeldSince);
+    if (win.length < 3) return null;
+
+    const a = win[0];
+    const b = win[win.length - 1];
     const spanMs = b.t - a.t;
     if (spanMs < o.windowMs * MIN_SPAN_FRACTION) return null;
-
-    // Only count travel accumulated while the pose was actually held, so motion
-    // from before the fingers came up can't contribute to a swipe.
-    if (this.poseHeldSince === null || this.poseHeldSince > a.t) return null;
 
     const dt = spanMs / 1000;
     const scale = (a.scale + b.scale) / 2;

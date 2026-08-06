@@ -6,13 +6,12 @@
 import { toPoints } from './landmarks.js';
 import { Recognizer } from './recognizer.js';
 
-const TASKS_VISION_URL =
-  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.mjs';
-// UMD build, for the classic worker: the ESM build fails inside a worker with
-// "ModuleFactory not set."
-const TASKS_VISION_UMD_URL =
-  'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/vision_bundle.js';
-const WASM_URL = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1/wasm';
+// Must match the version scripts/fetch-model.js vendors: a locally vendored
+// bundle paired with a different CDN wasm build fails in ways that look like a
+// broken camera rather than a version skew.
+const CDN_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@1.0.1';
+const VENDOR_BASE = './vendor';
+
 const CDN_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const LOCAL_MODEL_URL = './models/hand_landmarker.task';
@@ -61,6 +60,10 @@ const state = {
   // browsers without MediaStreamTrackProcessor and stops the moment you look away.
   mode: null,
   detectorTracks: [],
+  // The camera track is muted — by a screen lock, most often. Detection cannot
+  // work until it comes back, and restarting while muted would not help.
+  cameraMuted: false,
+  recovering: false,
   config: null,
   configRaw: '',
   view: null,
@@ -183,7 +186,25 @@ function logEntry(what, kind = 'note') {
   while (el.log.children.length > 40) el.log.lastElementChild.remove();
 }
 
+// When this page last asked the server to press Escape. Escape is the panic
+// disarm, so an Escape arriving right after we asked for one is our own
+// keystroke coming back rather than a user pressing the panic key.
+//
+// Belt and braces: config.js now rejects a bare `escape` binding outright, which
+// is the real fix, and with that in place this should never trigger. It stays
+// because the failure it prevents is invisible — the page disarms, every later
+// gesture is dropped, and nothing is logged anywhere — and because the server
+// and the page are separately deployable, so the two checks can drift apart.
+let lastSelfEscapeAt = -Infinity;
+// Generous enough to cover the request round trip on either side of the actual
+// key press, short enough that a real panic Escape a moment later still works.
+const SELF_ESCAPE_GRACE_MS = 400;
+
 async function send(name) {
+  // Stamped before the request, not after: the server presses the key and then
+  // responds, so the keystroke can reach this page before the response does.
+  if (state.config?.gestures?.[name] === 'escape') lastSelfEscapeAt = performance.now();
+
   try {
     const res = await fetch('./gesture', {
       method: 'POST',
@@ -193,6 +214,7 @@ async function send(name) {
     const data = await res.json().catch(() => ({}));
 
     if (data.fired) {
+      if (data.shortcut === 'escape') lastSelfEscapeAt = performance.now();
       logEntry(`${name} -> ${data.shortcut}`, 'fired');
     } else if (data.reason === 'cooldown') {
       logEntry(`${name} skipped (cooldown ${data.retryInMs}ms)`, 'skipped');
@@ -244,7 +266,7 @@ function handleLandmarks(landmarks, width, height) {
   const now = performance.now();
   const pts = landmarks && width && height ? toPoints(landmarks, width / height) : null;
 
-  const view = recognizer.update(pts, now);
+  const view = recognizer.update(pts, now, state.armed);
   state.view = view;
 
   if (view.gesture) onGestureDetected(view.gesture);
@@ -316,10 +338,10 @@ function set(node, text, cls = '') {
 function detectionStatus() {
   if (!state.cameraOn) return ['off', 'off'];
 
-  const stale = performance.now() - lastFrameAt > 1500;
-
   if (state.mode === 'page' && document.hidden) return ['paused (tab hidden)', 'moving'];
-  if (stale) return ['stalled', 'moving'];
+  if (state.cameraMuted) return ['camera muted', 'moving'];
+  if (state.recovering) return ['restarting…', 'moving'];
+  if (msSinceFrame() > 1500) return ['stalled', 'moving'];
 
   const fps = state.fps ? ` ${Math.round(state.fps)}fps` : '';
   return [`running${fps}`, 'on'];
@@ -345,6 +367,14 @@ function markFrame(now) {
     }
   }
   lastFrameAt = now;
+
+  if (recoveryAttempted) {
+    // Frames are flowing again, so the next stall is a new episode and gets its
+    // own single restart attempt. This is what keeps the watchdog from being a
+    // one-shot: lock the screen twice and it recovers twice.
+    recoveryAttempted = false;
+    logEntry('detection recovered', 'note');
+  }
 }
 
 function updateReadout() {
@@ -403,22 +433,50 @@ function showBanner(title, detail, bad = false) {
   el.banner.hidden = false;
 }
 
-async function resolveModelUrl() {
+async function exists(url) {
   try {
-    const res = await fetch(LOCAL_MODEL_URL, { method: 'HEAD' });
-    if (res.ok) return LOCAL_MODEL_URL;
+    const res = await fetch(url, { method: 'HEAD' });
+    return res.ok;
   } catch {
-    // Not vendored; fall through to the CDN.
+    return false;
   }
-  return CDN_MODEL_URL;
 }
 
-async function createLandmarker() {
+/**
+ * Where to load MediaPipe from: `public/vendor/` if it has been vendored, the
+ * CDN otherwise.
+ *
+ * Worth preferring the local copy for more than offline support. The worker runs
+ * `importScripts()` on the tasks-vision bundle while holding raw camera
+ * VideoFrames, and importScripts cannot carry an integrity hash — so from the
+ * CDN, a third party executes code in the one context with direct camera access.
+ *
+ * The bundle and the wasm are chosen together, never mixed: they are two halves
+ * of one build, and a local bundle against CDN wasm fails obscurely.
+ */
+async function resolveAssets() {
+  const vendored =
+    (await exists(`${VENDOR_BASE}/vision_bundle.js`)) &&
+    (await exists(`${VENDOR_BASE}/wasm/vision_wasm_internal.wasm`));
+  const base = vendored ? VENDOR_BASE : CDN_BASE;
+
+  return {
+    vendored,
+    // ESM for the page, UMD for the classic worker: the ESM build fails inside a
+    // worker with "ModuleFactory not set."
+    esm: `${base}/vision_bundle.mjs`,
+    umd: `${base}/vision_bundle.js`,
+    wasm: `${base}/wasm`,
+    model: (await exists(LOCAL_MODEL_URL)) ? LOCAL_MODEL_URL : CDN_MODEL_URL,
+  };
+}
+
+async function createLandmarker(assets) {
   // Imported lazily so the page still works offline: bindings, arming and the
   // test buttons don't need MediaPipe at all.
-  const { FilesetResolver, HandLandmarker } = await import(TASKS_VISION_URL);
-  const vision = await FilesetResolver.forVisionTasks(WASM_URL);
-  const modelAssetPath = await resolveModelUrl();
+  const { FilesetResolver, HandLandmarker } = await import(assets.esm);
+  const vision = await FilesetResolver.forVisionTasks(assets.wasm);
+  const modelAssetPath = assets.model;
 
   let lastError;
   for (const delegate of ['GPU', 'CPU']) {
@@ -438,6 +496,20 @@ async function createLandmarker() {
 let lastTimestamp = 0;
 let lastVideoTime = -1;
 let lastFrameAt = 0;
+// When the current detection session began. Staleness is measured from the later
+// of this and the last frame, so a freshly started camera gets a grace period
+// instead of reading "stalled" until its first frame lands — which would also
+// make the watchdog below restart a camera that is merely still warming up.
+let detectionStartedAt = 0;
+// One restart per stall episode. Cleared by markFrame() the moment frames come
+// back, so this bounds a *loop* without making recovery a one-shot: lock the
+// screen twice and the watchdog recovers twice.
+let recoveryAttempted = false;
+
+/** How long since a frame arrived, allowing for a just-started camera. */
+function msSinceFrame() {
+  return performance.now() - Math.max(lastFrameAt, detectionStartedAt);
+}
 
 function scheduleFrame() {
   if (!state.cameraOn) return;
@@ -478,17 +550,67 @@ function onFrame() {
 }
 
 /**
+ * Tear down everything the detector owns.
+ *
+ * Extracted because the failure path used to stop only the tracks in the stream
+ * it had just opened, leaving the *clone* in state.detectorTracks and the Worker
+ * alive. Each retry then accumulated another Worker holding its own MediaPipe
+ * instance and a 7.8 MB model — invisible until the tab ran out of memory.
+ */
+function teardownDetection() {
+  if (state.worker) {
+    state.worker.postMessage({ type: 'stop' });
+    state.worker.terminate();
+    state.worker = null;
+  }
+  for (const track of state.detectorTracks) track.stop();
+  state.detectorTracks = [];
+}
+
+/**
+ * Watch a camera track for the transitions that silently kill detection.
+ *
+ * `mute` is the one that matters: locking the screen mutes the camera, and the
+ * worker's `await reader.read()` then blocks forever with no error anywhere. The
+ * default open_palm binding locks the screen, so this is a self-inflicted wound
+ * the app has to be able to survive.
+ */
+function watchTrack(track, label) {
+  track.addEventListener('ended', () => {
+    logEntry(`camera track (${label}) ended`, 'failed');
+  });
+  track.addEventListener('mute', () => {
+    state.cameraMuted = true;
+    logEntry(`camera muted (${label}) — detection is paused`, 'note');
+    updateReadout();
+  });
+  track.addEventListener('unmute', () => {
+    state.cameraMuted = false;
+    // Give it a fresh grace period: frames often resume on their own, and
+    // restarting a camera that was about to recover is pure disruption.
+    detectionStartedAt = performance.now();
+    logEntry(`camera unmuted (${label})`, 'note');
+    updateReadout();
+  });
+}
+
+/**
  * Start detection in a worker, reading frames straight off the camera track.
  *
  * The track is cloned: MediaStreamTrackProcessor consumes the track it's given, so
  * handing over the original would blank the preview.
  */
-async function startWorkerDetection(stream, modelUrl) {
+async function startWorkerDetection(stream, assets) {
   const source = stream.getVideoTracks()[0];
   if (!source) throw new Error('the camera stream has no video track');
 
   const track = source.clone();
   state.detectorTracks.push(track);
+
+  // Both: the clone is what the worker reads, but a screen lock mutes the source
+  // and the clone independently, and either one going quiet stops detection.
+  watchTrack(source, 'preview');
+  watchTrack(track, 'detector');
 
   const processor = new MediaStreamTrackProcessor({ track });
   const worker = new Worker('./detector-worker.js');
@@ -533,9 +655,9 @@ async function startWorkerDetection(stream, modelUrl) {
     {
       type: 'start',
       readable: processor.readable,
-      bundleUrl: TASKS_VISION_UMD_URL,
-      wasmUrl: WASM_URL,
-      modelUrl,
+      bundleUrl: assets.umd,
+      wasmUrl: assets.wasm,
+      modelUrl: assets.model,
     },
     [processor.readable],
   );
@@ -568,13 +690,14 @@ async function startCamera() {
   // Prefer the worker: it's the only arrangement that survives the page being
   // hidden, which is the normal case for an app that drives other applications.
   const canUseWorker = typeof MediaStreamTrackProcessor === 'function';
+  const assets = await resolveAssets();
 
   try {
     if (canUseWorker) {
-      await startWorkerDetection(stream, await resolveModelUrl());
+      await startWorkerDetection(stream, assets);
       state.mode = 'worker';
     } else {
-      if (!state.landmarker) state.landmarker = await createLandmarker();
+      if (!state.landmarker) state.landmarker = await createLandmarker(assets);
       state.mode = 'page';
       showBanner(
         'Detection will pause when this window is hidden.',
@@ -582,6 +705,10 @@ async function startCamera() {
       );
     }
   } catch (err) {
+    // teardownDetection() first: startWorkerDetection may have got as far as
+    // cloning the track and spawning the Worker before throwing, and neither is
+    // reachable through `stream`.
+    teardownDetection();
     for (const track of stream.getTracks()) track.stop();
     el.video.srcObject = null;
     el.stageMsg.textContent = 'Could not start hand tracking.';
@@ -594,10 +721,19 @@ async function startCamera() {
     return;
   }
 
+  if (!assets.vendored) {
+    // Said once per start rather than as a banner: it is a real exposure — third
+    // party code running in the worker that holds camera frames — but not one
+    // that stops the app working, and a banner here would cry wolf.
+    logEntry('MediaPipe loaded from a CDN — run "npm run fetch-model" to vendor it', 'note');
+  }
+
   recognizer.reset();
   lastFrameAt = 0;
+  detectionStartedAt = performance.now();
   state.fps = 0;
   state.cameraOn = true;
+  state.cameraMuted = false;
   el.stageMsg.hidden = true;
   el.cameraBtn.disabled = false;
   el.cameraBtn.textContent = 'Stop camera';
@@ -608,13 +744,7 @@ async function startCamera() {
 function stopCamera() {
   state.cameraOn = false;
 
-  if (state.worker) {
-    state.worker.postMessage({ type: 'stop' });
-    state.worker.terminate();
-    state.worker = null;
-  }
-  for (const track of state.detectorTracks) track.stop();
-  state.detectorTracks = [];
+  teardownDetection();
 
   for (const track of el.video.srcObject?.getTracks() ?? []) track.stop();
   el.video.srcObject = null;
@@ -624,12 +754,63 @@ function stopCamera() {
   state.view = null;
   state.recent = null;
   state.fps = 0;
+  state.cameraMuted = false;
   draw(null);
   updateReadout();
 
   el.cameraBtn.textContent = 'Start camera';
   el.stageMsg.hidden = false;
   el.stageMsg.textContent = 'Camera is off.';
+}
+
+// ---------------------------------------------------------------- watchdog
+
+// How long without a frame counts as stalled. Comfortably longer than a slow
+// camera's worst frame interval, short enough that a lock/unlock cycle recovers
+// before you have finished typing your password.
+const STALL_MS = 3000;
+const WATCHDOG_INTERVAL_MS = 1000;
+
+/**
+ * Restart the camera when detection has gone quiet and stayed quiet.
+ *
+ * The case this exists for: open_palm is bound to cmd+ctrl+q, which locks the
+ * screen, which mutes the camera. The worker blocks on `await reader.read()`
+ * forever, the readout says "stalled", and nothing short of clicking Stop and
+ * Start again brings it back — so a single misfired gesture permanently kills
+ * detection until you notice and intervene.
+ */
+async function superviseDetection() {
+  if (!state.cameraOn || state.mode !== 'worker') return;
+  // Muted means the OS has taken the camera away — usually the lock screen.
+  // Restarting now would just re-acquire a muted track; wait for unmute, which
+  // resets the stall clock and gives it a chance to resume on its own.
+  if (state.cameraMuted || state.recovering || recoveryAttempted) return;
+  if (msSinceFrame() < STALL_MS) return;
+
+  recoveryAttempted = true;
+  state.recovering = true;
+  logEntry(`no frames for ${Math.round(msSinceFrame())}ms — restarting the camera`, 'note');
+  updateReadout();
+
+  try {
+    const wasArmed = state.armed;
+    stopCamera();
+    await startCamera();
+    // stopCamera() leaves arming alone, but say so in the log either way: a
+    // recovery that silently changed the arm state would be worse than the stall.
+    logEntry(
+      state.cameraOn
+        ? `camera restarted — ${wasArmed ? 'still armed' : 'still disarmed'}`
+        : 'camera restart failed — press Start camera to retry',
+      state.cameraOn ? 'note' : 'failed',
+    );
+  } catch (err) {
+    logEntry(`camera restart failed: ${err.message}`, 'failed');
+  } finally {
+    state.recovering = false;
+    updateReadout();
+  }
 }
 
 function setArmed(armed) {
@@ -648,11 +829,20 @@ el.cameraBtn.addEventListener('click', () => {
 
 el.armBtn.addEventListener('click', () => setArmed(!state.armed));
 
-// Escape is a one-way panic disarm. Deliberately not a toggle, and deliberately
-// not Space: `fist` is bound to space by default, so if this page happened to be
-// the focused window when a gesture fired, a Space toggle would arm itself.
+// Escape is a one-way panic disarm. Deliberately not a toggle: this page is
+// normally the frontmost window, so a gesture that presses the panic key would
+// otherwise be able to toggle the page's own arm state.
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && state.armed) setArmed(false);
+  if (event.key !== 'Escape' || !state.armed) return;
+
+  if (performance.now() - lastSelfEscapeAt < SELF_ESCAPE_GRACE_MS) {
+    // Said out loud rather than swallowed: an ignored panic key is exactly the
+    // kind of thing that must never be silent.
+    logEntry('ignored an Escape this page just fired — still armed', 'note');
+    return;
+  }
+
+  setArmed(false);
 });
 
 document.addEventListener('visibilitychange', () => {
@@ -675,4 +865,5 @@ await loadHealth();
 setInterval(pollConfig, 3000);
 // Keeps the detection status honest even when no frames are arriving to drive it.
 setInterval(updateReadout, 1000);
+setInterval(superviseDetection, WATCHDOG_INTERVAL_MS);
 updateReadout();

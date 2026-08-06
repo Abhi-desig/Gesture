@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { SwipeTracker } from '../public/swipe.js';
+import { DEFAULT_SWIPE_OPTIONS, SwipeTracker } from '../public/swipe.js';
 import { buildHand, motionStream } from './hand-fixture.js';
 
 // Sign convention reminder: the tracker negates raw dx because the camera faces
@@ -148,6 +148,57 @@ test('travel from before the pose formed does not count', () => {
     ),
   );
   assert.equal(fires.length, 0);
+});
+
+test('a swipe starting the moment the fingers come up still fires', () => {
+  // The first gesture of every run used to be swallowed. Samples are pushed on
+  // every hand-present frame, not only four-finger ones, and the old check
+  // required the *oldest* sample in the buffer to already be in-pose — so you
+  // had to hold four fingers still for a full windowMs before moving. Raise and
+  // swipe in one motion and nothing happened; you'd settle, retry, and the
+  // second attempt worked.
+  //
+  // Here the buffer is pre-loaded with a stationary fist, then the fingers come
+  // up and the hand leaves immediately.
+  const tracker = new SwipeTracker();
+  let poseStart = null;
+  let firedAt = null;
+  let swipe = null;
+
+  for (const { pts, t } of sequence(
+    motionStream({ pose: 'fist', dx: 0, durationMs: 300, frames: 20, start: { x: 0.5, y: 0.6 } }),
+    motionStream({ dx: RIGHTWARD, durationMs: 200, frames: 13, start: { x: 0.5, y: 0.6 } }),
+  )) {
+    const result = tracker.update(pts, t);
+    // Captured on the first four-finger frame, before a fire resets it to null.
+    poseStart ??= tracker.poseHeldSince;
+    if (result.swipe && firedAt === null) {
+      firedAt = t;
+      swipe = result.swipe;
+    }
+  }
+
+  assert.equal(swipe, 'swipe_right', 'raise-and-swipe in one motion should fire');
+
+  // The window at fire time still reaches back past the moment the pose formed,
+  // so the fist samples were genuinely still buffered. Without this the test
+  // could pass for the old reason — the window having aged out — rather than
+  // because the evaluation now slices.
+  const oldestInWindow = firedAt - DEFAULT_SWIPE_OPTIONS.windowMs;
+  assert.ok(
+    oldestInWindow < poseStart,
+    `pre-pose samples should still be in the window at fire time ` +
+      `(window starts ${poseStart - oldestInWindow}ms before the pose did)`,
+  );
+
+  // And the behavioural promise: roughly half a window of in-pose motion is
+  // enough, rather than a full window plus however long the pre-pose samples
+  // take to age out.
+  const inPoseMs = firedAt - poseStart;
+  assert.ok(
+    inPoseMs < DEFAULT_SWIPE_OPTIONS.windowMs,
+    `expected to fire on under a full window of in-pose motion (took ${inPoseMs}ms)`,
+  );
 });
 
 test('invertDirection flips the mapping for already-mirrored cameras', () => {
