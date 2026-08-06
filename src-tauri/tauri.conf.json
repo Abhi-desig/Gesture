@@ -15,7 +15,8 @@
         "height": 760,
         "resizable": true,
         "visible": false,
-        "url": "http://127.0.0.1:4321"
+        "url": "http://127.0.0.1:4321",
+        "backgroundThrottling": "disabled"
       }
     ],
     "security": {
