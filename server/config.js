@@ -61,6 +61,19 @@ export const DOCK_SWIPE_VARIANTS = ['iss', 'mmf'];
 export const SPACE_STRATEGIES = ['osascript', 'direct', 'dockswipe'];
 
 /**
+ * Bindings the *page* performs, not the server.
+ *
+ * These never become key presses and never reach a backend. `toggle_armed` is
+ * the reason the category exists: arming is page state, so a gesture that
+ * toggles it has to be handled where that state lives — and it has to work
+ * while the page is disarmed, which is exactly when nothing is being sent to
+ * the server at all.
+ */
+export const CLIENT_ACTIONS = ['toggle_armed'];
+
+const isClientAction = (combo) => CLIENT_ACTIONS.includes(combo);
+
+/**
  * Which CGEventSource state table the native helper attributes its events to.
  *
  * Only meaningful for the cgevent backend. It is a setting rather than a
@@ -247,6 +260,18 @@ export function validate(raw) {
   }
 
   for (const [name, combo] of Object.entries(rawGestures)) {
+    // Checked before parsing: a client action is not a shortcut and must not be
+    // run through the key parser, which would reject it as an unknown key.
+    if (isClientAction(combo)) {
+      gestures[name] = { combo, client: true };
+      if (!KNOWN_GESTURES.includes(name)) {
+        warnings.push(
+          `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}`,
+        );
+      }
+      continue;
+    }
+
     try {
       const parsed = parseShortcut(combo);
       if (isPanicChord(parsed)) {
@@ -363,6 +388,9 @@ export class ConfigStore {
         Object.entries(gestures).map(([name, g]) => [name, g.combo]),
       ),
       knownGestures: KNOWN_GESTURES,
+      // So the page can tell a binding it must perform itself from one the
+      // server will press, without hardcoding the list in two places.
+      clientActions: CLIENT_ACTIONS,
       dryRun: settings.dryRun,
       tuning: {
         holdMs: settings.holdMs,

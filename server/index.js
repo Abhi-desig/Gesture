@@ -12,7 +12,7 @@ import express from 'express';
 import { resolveBackend } from './backends/index.js';
 import { ConfigStore } from './config.js';
 import { readSpaceHotkeys, readSpaces, responsibleApp, windowServerSpaces } from './macos.js';
-import { ACCESSIBILITY_HELP, checkAccessibility } from './permissions.js';
+import { ACCESSIBILITY_HELP, accessibilityHelpFor, checkAccessibility } from './permissions.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -158,6 +158,81 @@ async function verifySpaceMoved(before) {
   };
 }
 
+/**
+ * A ring of recent page activity, for diagnosing "works in view, dead in the
+ * background" without anyone having to watch two windows at once.
+ *
+ * The page heartbeats every couple of seconds with its frame rate and
+ * visibility, and every gesture POST lands here with its outcome. Reading
+ * GET /recent after a background test then answers, from one place: was the
+ * page's main thread still running? were camera frames still flowing? did the
+ * gesture reach the server at all, and what did the server do with it?
+ */
+const RECENT_LIMIT = 200;
+const recent = [];
+
+function remember(event) {
+  recent.push({ t: new Date().toISOString(), ...event });
+  if (recent.length > RECENT_LIMIT) recent.shift();
+}
+
+app.post('/heartbeat', sameOriginOnly, (req, res) => {
+  const b = req.body ?? {};
+  remember({
+    type: 'heartbeat',
+    // Whitelisted rather than spread: this is a loopback diagnostics channel,
+    // not a place to let a page store arbitrary payloads.
+    fps: typeof b.fps === 'number' ? b.fps : null,
+    mode: typeof b.mode === 'string' ? b.mode : null,
+    armed: b.armed === true,
+    visibility: typeof b.visibility === 'string' ? b.visibility : null,
+    msSinceFrame: typeof b.msSinceFrame === 'number' ? Math.round(b.msSinceFrame) : null,
+    hasMSTP: b.hasMSTP === true,
+    engine: typeof b.engine === 'string' ? b.engine : null,
+  });
+  res.json({ ok: true });
+});
+
+/**
+ * Record that a client actually fetched the page and then ran its JavaScript.
+ *
+ * Added because "the window is blank" is otherwise unfalsifiable from outside
+ * the webview: there is no console to read and no devtools in a release build.
+ * A `page` event means the HTML was served; the `config` event that follows
+ * means the page's script ran far enough to ask for its bindings. Blank with
+ * neither is a navigation that never happened; blank with both is a rendering
+ * problem, and those are very different things to chase.
+ */
+function rememberFetch(kind, req) {
+  remember({
+    type: 'fetch',
+    what: kind,
+    // The tail of the UA, because Tauri's WKWebView presents itself as Safari
+    // and cannot be told apart by a keyword — but Chrome's UA ends in
+    // "Chrome/… Safari/…" while the webview's ends at "Safari/…", which is
+    // enough to tell the app's own loads from a browser tab pointed at the
+    // same port.
+    agent: (req.get('user-agent') ?? '').slice(-45),
+  });
+}
+
+app.post('/client', sameOriginOnly, (req, res) => {
+  const b = req.body ?? {};
+  remember({
+    type: 'client',
+    engine: typeof b.engine === 'string' ? b.engine : null,
+    hasMSTP: b.hasMSTP === true,
+    hasWorker: b.hasWorker === true,
+    hasGUM: b.hasGUM === true,
+    secureContext: b.secureContext === true,
+  });
+  res.json({ ok: true });
+});
+
+app.get('/recent', (_req, res) => {
+  res.json({ now: new Date().toISOString(), events: recent });
+});
+
 app.post('/gesture', sameOriginOnly, async (req, res) => {
   const { gestures, settings } = config.current;
   const name = req.body?.gesture;
@@ -179,6 +254,20 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
     });
   }
 
+  // A binding the page performs itself. Reaching here means the page POSTed
+  // something it should have handled locally — an older page against a newer
+  // config, most likely — so say so plainly rather than failing in the backend
+  // with an unparseable-shortcut error.
+  if (binding.client) {
+    return res.status(400).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: binding.combo,
+      error: `"${binding.combo}" is a client-side action; the page performs it, the server does not`,
+    });
+  }
+
   // performance.now(), not Date.now(): this clock only ever moves forward. Wall
   // clock can step backwards on an NTP correction or a sleep/wake, which makes
   // `waited` negative and wedges the gesture into a permanent 429 — the machine
@@ -187,6 +276,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   const previous = lastFired.get(name) ?? -Infinity;
   const waited = now - previous;
   if (waited < settings.cooldownMs) {
+    remember({ type: 'gesture', gesture: name, outcome: 'cooldown' });
     return res.status(429).json({
       ok: true,
       fired: false,
@@ -202,6 +292,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   lastFired.set(name, now);
 
   if (settings.dryRun) {
+    remember({ type: 'gesture', gesture: name, outcome: 'dryRun' });
     console.log(`[dry-run] ${name} -> ${binding.combo}`);
     return res.json({
       ok: true,
@@ -219,6 +310,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   // per press because the permission can be revoked while the server runs.
   const access = await checkAccessibility();
   if (access.granted === false) {
+    remember({ type: 'gesture', gesture: name, outcome: 'accessibility-denied' });
     lastFired.delete(name);
     console.error(`${name} -> ${binding.combo} NOT pressed: Accessibility access denied`);
     return res.status(503).json({
@@ -227,7 +319,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
       gesture: name,
       shortcut: binding.combo,
       error: 'macOS is discarding key presses: Accessibility access is not granted',
-      help: ACCESSIBILITY_HELP,
+      help: accessibilityHelpFor(owner),
     });
   }
 
@@ -242,6 +334,14 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
     await backend.press(binding.parsed);
 
     const space = await verifySpaceMoved(watchSpaces);
+    remember({
+      type: 'gesture',
+      gesture: name,
+      outcome: 'pressed',
+      ...(space
+        ? { space: space.moved && space.held ? 'moved' : space.moved ? 'reverted' : 'no-move' }
+        : {}),
+    });
     if (space?.moved && space.held) {
       console.log(`${name} -> ${binding.combo}  (space ${space.from} -> ${space.to})`);
     } else if (space?.moved) {
@@ -283,6 +383,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
         : {}),
     });
   } catch (err) {
+    remember({ type: 'gesture', gesture: name, outcome: 'error', error: err.message });
     lastFired.delete(name); // a failed press shouldn't burn the cooldown
     console.error(`failed to press ${binding.combo} for ${name}: ${err.message}`);
     return res.status(500).json({
@@ -295,7 +396,10 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   }
 });
 
-app.get('/config', (_req, res) => res.json(config.clientPayload()));
+app.get('/config', (req, res) => {
+  rememberFetch('config', req);
+  res.json(config.clientPayload());
+});
 
 app.get('/health', async (_req, res) => {
   // Re-checked per request, never cached. Accessibility can be revoked while the
@@ -306,13 +410,21 @@ app.get('/health', async (_req, res) => {
     backend: backend.name,
     backendReason: backend.reason,
     keysendSource: backend.keysendSource ?? null,
+    spaceStrategy: backend.spaceStrategy ?? null,
     verifySpaceSwitch: config.current.settings.verifySpaceSwitch,
     dryRun: config.current.settings.dryRun,
     accessibility: await checkAccessibility(),
     accessibilityAtStartup: accessibility,
-    accessibilityHelp: ACCESSIBILITY_HELP,
+    accessibilityHelp: accessibilityHelpFor(owner),
     boundGestures: Object.keys(config.current.gestures),
   });
+});
+
+app.use((req, _res, next) => {
+  if (req.method === 'GET' && (req.path === '/' || req.path === '/index.html')) {
+    rememberFetch('page', req);
+  }
+  next();
 });
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
@@ -442,14 +554,14 @@ const server = app.listen(port, HOST, () => {
     console.log('  !! Accessibility access is NOT granted, so key presses will be');
     console.log('  !! silently ignored by macOS. Gestures will look like they work');
     console.log('  !! and nothing will happen. Grant it here, then restart:');
-    console.log(`  !! ${ACCESSIBILITY_HELP}`);
+    console.log(`  !! ${accessibilityHelpFor(owner)}`);
     // Named rather than described, because "the terminal app running this
     // server" is exactly the part people get wrong — the grant follows whichever
     // editor or terminal launched it, not node.
     if (owner) console.log(`  !! The app to enable is: ${owner.name}`);
   } else if (accessibility.granted === null && accessibility.relevant) {
     console.log('  Could not determine Accessibility access. If gestures fire but');
-    console.log(`  nothing happens: ${ACCESSIBILITY_HELP}`);
+    console.log(`  nothing happens: ${accessibilityHelpFor(owner)}`);
   }
   console.log('');
 
@@ -463,4 +575,26 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     config.close();
     server.close(() => process.exit(0));
   });
+}
+
+// When the desktop app spawns this server it passes its own pid. If that
+// process dies without managing to kill us — force-quit, crash, SIGKILL — we
+// must not linger: an orphaned server holds the port with its TCC permissions
+// attributed to a dead app, so every osascript press fails with error 1002 and
+// the next app launch silently attaches to the broken instance.
+const parentPid = Number(process.env.GESTURE_PARENT_PID);
+if (Number.isInteger(parentPid) && parentPid > 1) {
+  const watchdog = setInterval(() => {
+    try {
+      process.kill(parentPid, 0); // signal 0: existence check only
+    } catch {
+      console.log(`parent process ${parentPid} is gone; shutting down`);
+      clearInterval(watchdog);
+      config.close();
+      server.close(() => process.exit(0));
+      // A lingering request must not keep the zombie alive.
+      setTimeout(() => process.exit(0), 2000).unref();
+    }
+  }, 3000);
+  watchdog.unref();
 }

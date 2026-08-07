@@ -2,7 +2,8 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { validate } from '../server/config.js';
+import { resolveBackend } from '../server/backends/index.js';
+import { ConfigStore, validate } from '../server/config.js';
 
 const base = {
   gestures: { fist: 'audio_play' },
@@ -75,4 +76,46 @@ test('verifySpaceSwitch is on by default and is a boolean', () => {
   assert.equal(validate(base).settings.verifySpaceSwitch, true);
   assert.equal(validate({ ...base, verifySpaceSwitch: false }).settings.verifySpaceSwitch, false);
   assert.throws(() => validate({ ...base, verifySpaceSwitch: 'yes' }), /must be true or false/);
+});
+
+test('a client action is a binding, not a shortcut', () => {
+  // toggle_armed must not go through the key parser — it is performed by the
+  // page, never pressed — so it carries no `parsed` and is flagged instead.
+  const { gestures } = validate({ ...base, gestures: { pinch: 'toggle_armed' } });
+  assert.equal(gestures.pinch.combo, 'toggle_armed');
+  assert.equal(gestures.pinch.client, true);
+  assert.equal(gestures.pinch.parsed, undefined);
+});
+
+test('the client action list reaches the page', () => {
+  // The page decides locally whether a gesture is its own to perform. If this
+  // list did not travel with the config, that decision would be a hardcoded
+  // copy that could drift from the validator.
+  const store = new ConfigStore(new URL('../config.json', import.meta.url).pathname);
+  store.load();
+  assert.ok(store.clientPayload().clientActions.includes('toggle_armed'));
+});
+
+test('a backend is not disqualified by a client action it cannot press', () => {
+  // Regression: unsupportedBindings() tested binding.parsed for every gesture.
+  // A client action has none, so every backend looked incapable of the config
+  // and resolution fell all the way through to dry-run — no keys at all.
+  const bindings = validate({
+    ...base,
+    gestures: { pinch: 'toggle_armed', fist: 'audio_play' },
+  }).gestures;
+
+  const backend = {
+    name: 'fake',
+    supports: (combo) => combo?.key === 'audio_play',
+    press: async () => {},
+  };
+  const messages = [];
+  return resolveBackend('auto', bindings, { log: (m) => messages.push(m) }).then(() => {
+    assert.ok(
+      !messages.some((m) => m.includes('cannot send')),
+      `client action should not count against a backend: ${messages.join(' | ')}`,
+    );
+    assert.equal(backend.supports({ key: 'audio_play' }), true);
+  });
 });

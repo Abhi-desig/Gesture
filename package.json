@@ -9,11 +9,14 @@
     "node": ">=22"
   },
   "scripts": {
-    "start": "node server/index.js",
-    "test": "node --test \"test/*.test.js\"",
-    "fetch-model": "node scripts/fetch-model.js",
+    "app:build": "tauri build",
+    "app:dev": "tauri dev",
     "build:native": "node scripts/build-native.mjs",
-    "probe:keysend": "node scripts/keysend-probe.mjs"
+    "fetch-model": "node scripts/fetch-model.js",
+    "probe:keysend": "node scripts/keysend-probe.mjs",
+    "start": "node server/index.js",
+    "tauri": "tauri",
+    "test": "node --test \"test/*.test.js\""
   },
   "dependencies": {
     "@nut-tree-fork/node-mac-permissions": "^2.2.1",

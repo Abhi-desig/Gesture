@@ -275,3 +275,43 @@ test('an armed pose still fires only once', () => {
   assert.deepEqual(run(r, hold({ pose: 'fist', ms: 800 })), ['fist']);
   assert.ok(r.lastFired.get('fist') > 0);
 });
+
+test('a per-pose canFire lets one gesture act while the rest stay silent', () => {
+  // What binding pinch to toggle_armed needs: the pinch must fire while the
+  // page is disarmed — it is the way back from disarmed — while every other
+  // pose stays unrecorded, exactly as a flat canFire=false would leave it.
+  const r = new Recognizer();
+  const allowPinchOnly = (pose) => pose === 'pinch';
+
+  const pinches = [];
+  for (const { pts, t } of hold({ pose: 'pinch', ms: 400, startT: 1000 })) {
+    const view = r.update(pts, t, allowPinchOnly);
+    if (view.gesture) pinches.push(view.gesture);
+  }
+
+  // Fires, and only once: the cooldown must be recorded, or a held pinch would
+  // toggle the armed state on every frame it is visible.
+  assert.deepEqual(pinches, ['pinch'], 'pinch should fire exactly once while disarmed');
+  assert.ok(r.lastFired.get('pinch') > 0, 'the fire must be recorded to take the cooldown');
+
+  const fists = [];
+  for (const { pts, t } of hold({ pose: 'fist', ms: 400, startT: 5000 })) {
+    const view = r.update(pts, t, allowPinchOnly);
+    if (view.gesture) fists.push(view.gesture);
+  }
+
+  assert.ok(fists.length > 0, 'a fist is still reported for the readout');
+  assert.equal(r.lastFired.get('fist'), undefined, 'but must not be recorded as fired');
+});
+
+test('a boolean canFire still works', () => {
+  // The predicate is an addition, not a replacement: existing callers and the
+  // recognizer's own default must behave exactly as before.
+  const r = new Recognizer();
+  const fired = [];
+  for (const { pts, t } of hold({ pose: 'fist', ms: 400, startT: 1000 })) {
+    const view = r.update(pts, t, true);
+    if (view.gesture) fired.push(view.gesture);
+  }
+  assert.deepEqual(fired, ['fist']);
+});

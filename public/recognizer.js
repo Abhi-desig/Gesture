@@ -100,7 +100,8 @@ export class Recognizer {
    * @param {{x:number,y:number}[]|null} pts Aspect-corrected points, or null/empty
    *   when no hand is in view.
    * @param {number} now Monotonic ms.
-   * @param {boolean} canFire Whether a recognized pose will actually be acted on.
+   * @param {boolean|((pose: string) => boolean)} canFire Whether a recognized
+   *   pose will actually be acted on. A function is asked per pose.
    *   False while the page is disarmed. Recognition still runs — the readout has
    *   to stay live — but nothing is *recorded* as having fired, because a pose
    *   made between "Start camera" and "Arm" would otherwise consume its own
@@ -153,7 +154,13 @@ export class Recognizer {
     // burns this pose's cooldown, and with requireReleaseBetweenFires on it also
     // demands a full pose break before the pose can fire again, so the first
     // real gesture after arming would be dropped.
-    if (!canFire) return pose;
+    //
+    // A predicate rather than a flag, because the answer is per-pose: a gesture
+    // bound to a client-side action (arming the page, say) has to act while
+    // disarmed, and must therefore take the cooldown that stops it repeating on
+    // every frame — while every other pose still goes unrecorded.
+    const allowed = typeof canFire === 'function' ? canFire(pose) === true : canFire;
+    if (!allowed) return pose;
 
     this.lastFired.set(pose, now);
     this.run.fired = true;
