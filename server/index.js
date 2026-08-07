@@ -12,7 +12,7 @@ import express from 'express';
 import { resolveBackend } from './backends/index.js';
 import { ConfigStore } from './config.js';
 import { readSpaceHotkeys, readSpaces, responsibleApp, windowServerSpaces } from './macos.js';
-import { ACCESSIBILITY_HELP, checkAccessibility } from './permissions.js';
+import { ACCESSIBILITY_HELP, accessibilityHelpFor, checkAccessibility } from './permissions.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -187,6 +187,44 @@ app.post('/heartbeat', sameOriginOnly, (req, res) => {
     armed: b.armed === true,
     visibility: typeof b.visibility === 'string' ? b.visibility : null,
     msSinceFrame: typeof b.msSinceFrame === 'number' ? Math.round(b.msSinceFrame) : null,
+    hasMSTP: b.hasMSTP === true,
+    engine: typeof b.engine === 'string' ? b.engine : null,
+  });
+  res.json({ ok: true });
+});
+
+/**
+ * Record that a client actually fetched the page and then ran its JavaScript.
+ *
+ * Added because "the window is blank" is otherwise unfalsifiable from outside
+ * the webview: there is no console to read and no devtools in a release build.
+ * A `page` event means the HTML was served; the `config` event that follows
+ * means the page's script ran far enough to ask for its bindings. Blank with
+ * neither is a navigation that never happened; blank with both is a rendering
+ * problem, and those are very different things to chase.
+ */
+function rememberFetch(kind, req) {
+  remember({
+    type: 'fetch',
+    what: kind,
+    // The tail of the UA, because Tauri's WKWebView presents itself as Safari
+    // and cannot be told apart by a keyword — but Chrome's UA ends in
+    // "Chrome/… Safari/…" while the webview's ends at "Safari/…", which is
+    // enough to tell the app's own loads from a browser tab pointed at the
+    // same port.
+    agent: (req.get('user-agent') ?? '').slice(-45),
+  });
+}
+
+app.post('/client', sameOriginOnly, (req, res) => {
+  const b = req.body ?? {};
+  remember({
+    type: 'client',
+    engine: typeof b.engine === 'string' ? b.engine : null,
+    hasMSTP: b.hasMSTP === true,
+    hasWorker: b.hasWorker === true,
+    hasGUM: b.hasGUM === true,
+    secureContext: b.secureContext === true,
   });
   res.json({ ok: true });
 });
@@ -267,7 +305,7 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
       gesture: name,
       shortcut: binding.combo,
       error: 'macOS is discarding key presses: Accessibility access is not granted',
-      help: ACCESSIBILITY_HELP,
+      help: accessibilityHelpFor(owner),
     });
   }
 
@@ -344,7 +382,10 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   }
 });
 
-app.get('/config', (_req, res) => res.json(config.clientPayload()));
+app.get('/config', (req, res) => {
+  rememberFetch('config', req);
+  res.json(config.clientPayload());
+});
 
 app.get('/health', async (_req, res) => {
   // Re-checked per request, never cached. Accessibility can be revoked while the
@@ -360,9 +401,16 @@ app.get('/health', async (_req, res) => {
     dryRun: config.current.settings.dryRun,
     accessibility: await checkAccessibility(),
     accessibilityAtStartup: accessibility,
-    accessibilityHelp: ACCESSIBILITY_HELP,
+    accessibilityHelp: accessibilityHelpFor(owner),
     boundGestures: Object.keys(config.current.gestures),
   });
+});
+
+app.use((req, _res, next) => {
+  if (req.method === 'GET' && (req.path === '/' || req.path === '/index.html')) {
+    rememberFetch('page', req);
+  }
+  next();
 });
 
 app.use(express.static(PUBLIC_DIR, { extensions: ['html'] }));
@@ -492,14 +540,14 @@ const server = app.listen(port, HOST, () => {
     console.log('  !! Accessibility access is NOT granted, so key presses will be');
     console.log('  !! silently ignored by macOS. Gestures will look like they work');
     console.log('  !! and nothing will happen. Grant it here, then restart:');
-    console.log(`  !! ${ACCESSIBILITY_HELP}`);
+    console.log(`  !! ${accessibilityHelpFor(owner)}`);
     // Named rather than described, because "the terminal app running this
     // server" is exactly the part people get wrong — the grant follows whichever
     // editor or terminal launched it, not node.
     if (owner) console.log(`  !! The app to enable is: ${owner.name}`);
   } else if (accessibility.granted === null && accessibility.relevant) {
     console.log('  Could not determine Accessibility access. If gestures fire but');
-    console.log(`  nothing happens: ${ACCESSIBILITY_HELP}`);
+    console.log(`  nothing happens: ${accessibilityHelpFor(owner)}`);
   }
   console.log('');
 

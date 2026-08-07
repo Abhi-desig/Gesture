@@ -880,6 +880,25 @@ setInterval(updateReadout, 1000);
 // The page stays visible, frames keep flowing, and the strip doubles as an
 // honest "the camera is on" indicator. Clicking it restores the window.
 
+// Report what this client can do, once, at load — independent of whether the
+// camera is running. Background detection hinges entirely on
+// MediaStreamTrackProcessor: with it the detector lives in a Worker and survives
+// being hidden, without it detection is pumped by requestVideoFrameCallback on
+// the main thread, which the engine freezes for a non-visible page. That is a
+// property of the engine, so it should be answerable without asking anyone to
+// start a camera first.
+fetch('/client', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    engine: window.__TAURI__ ? 'tauri-webview' : 'browser',
+    hasMSTP: typeof MediaStreamTrackProcessor === 'function',
+    hasWorker: typeof Worker === 'function',
+    hasGUM: !!navigator.mediaDevices?.getUserMedia,
+    secureContext: window.isSecureContext,
+  }),
+}).catch(() => {});
+
 const tauriWindow = window.__TAURI__?.window ?? null;
 const pill = { active: false, saved: null, entering: false };
 
@@ -987,6 +1006,13 @@ setInterval(() => {
       armed: state.armed,
       visibility: document.visibilityState,
       msSinceFrame: Math.round(msSinceFrame()),
+      // Which engine this client is, and whether it *can* detect while hidden.
+      // Reported rather than assumed: 'worker' mode requires
+      // MediaStreamTrackProcessor, and whether the Tauri webview has it decides
+      // whether background detection is possible at all or has to be faked by
+      // keeping a window on screen.
+      hasMSTP: typeof MediaStreamTrackProcessor === 'function',
+      engine: window.__TAURI__ ? 'tauri-webview' : 'browser',
     }),
     // A diagnostics channel must never become the thing that breaks.
   }).catch(() => {});

@@ -338,9 +338,20 @@ pub fn run() {
             std::thread::spawn(move || {
                 if wait_for_server(Duration::from_secs(15)) {
                     if let Some(window) = handle.get_webview_window("main") {
-                        // Reload: the webview was pointed at the port before the
-                        // server was listening, so it is showing a failure page.
-                        let _ = window.eval("location.replace(location.href)");
+                        // A real navigation, not an eval'd location.reload().
+                        // The window is created before the server is listening,
+                        // so the webview is sitting on WebKit's "cannot connect"
+                        // page — and script injected into *that* page never runs,
+                        // which left the window blank once the server came up.
+                        match SERVER_URL.parse() {
+                            Ok(url) => {
+                                if let Err(err) = window.navigate(url) {
+                                    eprintln!("gesture: could not load {SERVER_URL}: {err}");
+                                }
+                            }
+                            Err(err) => eprintln!("gesture: bad server url: {err}"),
+                        }
+                        println!("gesture: server is up, loaded {SERVER_URL}");
                         let _ = window.show();
                         let _ = window.set_focus();
                     }

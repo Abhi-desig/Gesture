@@ -18,6 +18,30 @@ export const ACCESSIBILITY_HELP =
   'System Settings > Privacy & Security > Accessibility — enable the terminal app running this server.';
 
 /**
+ * The same instruction, naming the app that actually needs the checkbox.
+ *
+ * The generic wording says "the terminal app running this server", which is
+ * wrong once the server is a child of the bundled desktop app — it sends people
+ * to tick their editor while the grant is owed by Gesture. The caller knows the
+ * responsible app; this just puts its name in the sentence.
+ *
+ * The rebuild note is not incidental. An ad-hoc signed build's designated
+ * requirement is `cdhash H"…"` — the literal hash of that one binary — so every
+ * rebuild is a different application as far as TCC is concerned and the grant
+ * silently stops applying. Anyone who has just granted access and is still
+ * seeing this needs to know that before they go looking for a bug.
+ */
+export function accessibilityHelpFor(owner) {
+  if (!owner?.name) return ACCESSIBILITY_HELP;
+  return (
+    `System Settings > Privacy & Security > Accessibility — enable "${owner.name}". ` +
+    'If it is already ticked, remove it with the − button and add it again: an ' +
+    'unsigned build gets a new identity every time it is rebuilt, and macOS ties ' +
+    'the permission to the exact binary it was granted to.'
+  );
+}
+
+/**
  * @returns {Promise<{relevant: boolean, granted: boolean|null, status?: string, error?: string}>}
  *   `granted: null` means genuinely undetermined — never guessed.
  */
