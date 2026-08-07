@@ -3,6 +3,9 @@
   "identifier": "default",
   "description": "The page needs exactly the window controls behind pill mode — WKWebView freezes frame delivery to any non-visible page, so when the window would be hidden while the camera runs, the page shrinks it to a tiny always-on-top pill instead. Everything else still goes over HTTP to the Node server, so nothing else is granted.",
   "windows": ["main"],
+  "remote": {
+    "urls": ["http://127.0.0.1:4321", "http://localhost:4321"]
+  },
   "permissions": [
     "core:default",
     "core:window:allow-set-size",

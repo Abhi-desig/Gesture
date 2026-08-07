@@ -14,8 +14,17 @@
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
+
+/// Set only by Quit, and read by the window's close handler.
+///
+/// `app.exit()` asks every window to close, which fires the same
+/// `CloseRequested` event the red button does. That handler prevents the close
+/// so the app can live in the menu bar — and without this flag it prevents the
+/// *quit* too, so Quit Gesture silently did nothing.
+static QUITTING: AtomicBool = AtomicBool::new(false);
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
@@ -150,8 +159,13 @@ fn start_server(app: &tauri::AppHandle) -> Option<Child> {
         node.display(),
         root.display()
     );
+    // The child watches this pid and exits when it dies. The RunEvent::Exit
+    // cleanup below covers a graceful quit, but not a SIGTERM/kill — which is
+    // exactly how an orphan node ended up holding port 4321 with its TCC
+    // permissions attributed to a dead app, failing every osascript call.
     match Command::new(&node)
         .arg("server/index.js")
+        .env("GESTURE_PARENT_PID", std::process::id().to_string())
         .current_dir(&root)
         .spawn()
     {
@@ -246,8 +260,14 @@ pub fn run() {
             // disagrees with the LaunchAgent on disk is worse than no tick.
             let autostart_item = autostart.clone();
 
+            // A dedicated monochrome icon, not the app icon. macOS template
+            // images are recoloured from their alpha channel alone, so the real
+            // logo — which has an opaque rounded-square background — would mask
+            // to a solid blob in the menu bar.
+            let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/tray.png"))?;
+
             TrayIconBuilder::with_id("main")
-                .icon(app.default_window_icon().unwrap().clone())
+                .icon(tray_icon)
                 .icon_as_template(true)
                 .tooltip("Gesture")
                 .menu(&menu)
@@ -273,7 +293,10 @@ pub fn run() {
                         let _ = autostart_item
                             .set_checked(launcher.is_enabled().unwrap_or(false));
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        QUITTING.store(true, Ordering::SeqCst);
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .build(app)?;
@@ -290,6 +313,11 @@ pub fn run() {
                 let close_target = window.clone();
                 window.on_window_event(move |event| {
                     if let WindowEvent::CloseRequested { api, .. } = event {
+                        // Let the window actually close when this is a quit
+                        // rather than the red button, or the app can never exit.
+                        if QUITTING.load(Ordering::SeqCst) {
+                            return;
+                        }
                         api.prevent_close();
                         // The fallback lives inside the script: eval() only
                         // reports whether the script was queued, so a page

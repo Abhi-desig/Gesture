@@ -355,6 +355,7 @@ app.get('/health', async (_req, res) => {
     backend: backend.name,
     backendReason: backend.reason,
     keysendSource: backend.keysendSource ?? null,
+    spaceStrategy: backend.spaceStrategy ?? null,
     verifySpaceSwitch: config.current.settings.verifySpaceSwitch,
     dryRun: config.current.settings.dryRun,
     accessibility: await checkAccessibility(),
@@ -512,4 +513,26 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     config.close();
     server.close(() => process.exit(0));
   });
+}
+
+// When the desktop app spawns this server it passes its own pid. If that
+// process dies without managing to kill us — force-quit, crash, SIGKILL — we
+// must not linger: an orphaned server holds the port with its TCC permissions
+// attributed to a dead app, so every osascript press fails with error 1002 and
+// the next app launch silently attaches to the broken instance.
+const parentPid = Number(process.env.GESTURE_PARENT_PID);
+if (Number.isInteger(parentPid) && parentPid > 1) {
+  const watchdog = setInterval(() => {
+    try {
+      process.kill(parentPid, 0); // signal 0: existence check only
+    } catch {
+      console.log(`parent process ${parentPid} is gone; shutting down`);
+      clearInterval(watchdog);
+      config.close();
+      server.close(() => process.exit(0));
+      // A lingering request must not keep the zombie alive.
+      setTimeout(() => process.exit(0), 2000).unref();
+    }
+  }, 3000);
+  watchdog.unref();
 }
