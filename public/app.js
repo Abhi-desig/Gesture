@@ -233,15 +233,53 @@ async function send(name) {
   }
 }
 
+/**
+ * Bindings this page performs rather than sending to the server.
+ *
+ * The list comes from the server so it cannot drift from the validator, but it
+ * falls back to the one action that exists — an older server that does not send
+ * the field should still let a pinch arm the page.
+ */
+function clientActions() {
+  return state.config?.clientActions ?? ['toggle_armed'];
+}
+
+/** What a gesture is bound to, or null when it is unbound. */
+const bindingFor = (name) => state.config?.gestures?.[name] ?? null;
+
+/** Is this gesture handled locally? Answered per gesture, from config. */
+function isClientGesture(name) {
+  const combo = bindingFor(name);
+  return combo !== null && clientActions().includes(combo);
+}
+
+/**
+ * Run a client-side binding. Returns false when it isn't one.
+ *
+ * Deliberately works while disarmed: `toggle_armed` is the way back from
+ * disarmed, so gating it on being armed would make it a one-way switch.
+ */
+function runClientAction(name) {
+  const combo = bindingFor(name);
+  if (combo !== 'toggle_armed') return false;
+
+  setArmed(!state.armed, name);
+  return true;
+}
+
 /** Detected gestures are silently dropped while disarmed — no log spam. */
 function onGestureDetected(name) {
   state.recent = name;
   state.recentAt = performance.now();
+  if (runClientAction(name)) return;
   if (!state.armed) return;
   send(name);
 }
 
 function simulate(name) {
+  // A client action is testable in either state, because it does not depend on
+  // being armed — and for toggle_armed, requiring it would be contradictory.
+  if (runClientAction(name)) return;
   if (!state.armed) {
     logEntry('arm first, then test', 'note');
     return;
@@ -266,7 +304,11 @@ function handleLandmarks(landmarks, width, height) {
   const now = performance.now();
   const pts = landmarks && width && height ? toPoints(landmarks, width / height) : null;
 
-  const view = recognizer.update(pts, now, state.armed);
+  // Per pose, not a flat "am I armed": a gesture bound to a client action has
+  // to fire while disarmed, and must take the cooldown that keeps it from
+  // repeating on every frame. Everything else stays unrecorded while disarmed
+  // so the first real gesture after arming is not swallowed.
+  const view = recognizer.update(pts, now, (pose) => state.armed || isClientGesture(pose));
   state.view = view;
 
   if (view.gesture) onGestureDetected(view.gesture);
@@ -813,11 +855,19 @@ async function superviseDetection() {
   }
 }
 
-function setArmed(armed) {
+/**
+ * @param {boolean} armed
+ * @param {string|null} source The gesture that caused it, when one did. Logged
+ *   as a single attributed line: without this a gesture-driven toggle wrote two
+ *   entries — its own and this one — for one action.
+ */
+function setArmed(armed, source = null) {
   state.armed = armed;
   el.armBtn.setAttribute('aria-pressed', String(armed));
   el.armLabel.textContent = armed ? 'Armed' : 'Disarmed';
-  logEntry(armed ? 'armed — gestures will press keys' : 'disarmed', 'note');
+
+  const what = armed ? 'armed — gestures will press keys' : 'disarmed';
+  logEntry(source ? `${source} -> ${what}` : what, source ? 'fired' : 'note');
 }
 
 // ---------------------------------------------------------------- boot

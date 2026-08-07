@@ -41,6 +41,11 @@ function createDryRun(reason) {
 function unsupportedBindings(backend, bindings) {
   if (typeof backend.supports !== 'function') return [];
   return Object.entries(bindings)
+    // Client actions are performed by the page and never pressed, so a backend
+    // that cannot express one is not thereby unsuitable. Without this skip they
+    // have no `parsed` to test and every backend looks incapable, which drops
+    // the whole app to dry-run.
+    .filter(([, binding]) => !binding.client)
     .filter(([, binding]) => !backend.supports(binding.parsed))
     .map(([name, binding]) => `${name} -> ${binding.combo}`);
 }

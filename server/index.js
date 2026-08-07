@@ -254,6 +254,20 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
     });
   }
 
+  // A binding the page performs itself. Reaching here means the page POSTed
+  // something it should have handled locally — an older page against a newer
+  // config, most likely — so say so plainly rather than failing in the backend
+  // with an unparseable-shortcut error.
+  if (binding.client) {
+    return res.status(400).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: binding.combo,
+      error: `"${binding.combo}" is a client-side action; the page performs it, the server does not`,
+    });
+  }
+
   // performance.now(), not Date.now(): this clock only ever moves forward. Wall
   // clock can step backwards on an NTP correction or a sleep/wake, which makes
   // `waited` negative and wedges the gesture into a permanent 429 — the machine
