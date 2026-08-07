@@ -15,6 +15,11 @@ editing that file — the server picks it up on save, no restart and no code cha
 browser: camera -> landmarks -> gesture name  --POST-->  server: shortcut -> key press
 ```
 
+Contributing, or want to know how it works inside?
+**[ARCHITECTURE.md](ARCHITECTURE.md)** covers the whole system end to end — the
+three processes, the detection pipeline, why the UI runs in Chrome, how key
+injection works on macOS, and the traps.
+
 ## Desktop app (Tauri)
 
 A native menu-bar host lives in [`src-tauri/`](src-tauri). It **renders nothing**:
