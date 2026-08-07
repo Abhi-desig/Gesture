@@ -866,20 +866,6 @@ setInterval(pollConfig, 3000);
 // Keeps the detection status honest even when no frames are arriving to drive it.
 setInterval(updateReadout, 1000);
 
-// ---------------------------------------------------------------- pill mode
-//
-// Only in the Tauri app. WKWebView stops delivering camera frames to any page
-// it considers non-visible — requestVideoFrameCallback and requestAnimationFrame
-// both freeze — and WebKit has no MediaStreamTrackProcessor, so the Web Worker
-// path that keeps Chrome detecting in a background tab does not exist here. No
-// scheduling policy changes that; it was measured via /recent (heartbeats kept
-// flowing while msSinceFrame grew without bound).
-//
-// So when this window would be hidden or covered while the camera runs, it
-// shrinks to a small always-on-top strip on every Space instead of hiding.
-// The page stays visible, frames keep flowing, and the strip doubles as an
-// honest "the camera is on" indicator. Clicking it restores the window.
-
 // Report what this client can do, once, at load — independent of whether the
 // camera is running. Background detection hinges entirely on
 // MediaStreamTrackProcessor: with it the detector lives in a Worker and survives
@@ -899,94 +885,6 @@ fetch('/client', {
   }),
 }).catch(() => {});
 
-const tauriWindow = window.__TAURI__?.window ?? null;
-const pill = { active: false, saved: null, entering: false };
-
-async function enterPill() {
-  if (!tauriWindow || pill.active || pill.entering || !state.cameraOn) return;
-  pill.entering = true;
-
-  const win = tauriWindow.getCurrentWindow();
-  try {
-    const [position, size] = await Promise.all([win.outerPosition(), win.outerSize()]);
-    pill.saved = { position, size };
-
-    document.body.classList.add('pill');
-    updatePillText();
-
-    await win.setVisibleOnAllWorkspaces(true);
-    await win.setAlwaysOnTop(true);
-
-    const WIDTH = 190;
-    const HEIGHT = 54;
-    await win.setSize(new tauriWindow.LogicalSize(WIDTH, HEIGHT));
-
-    // Bottom-right of the current monitor, clear of the Dock's usual height.
-    const monitor = await tauriWindow.currentMonitor();
-    if (monitor) {
-      const scale = monitor.scaleFactor || 1;
-      const x = (monitor.position.x + monitor.size.width) / scale - WIDTH - 18;
-      const y = (monitor.position.y + monitor.size.height) / scale - HEIGHT - 90;
-      await win.setPosition(new tauriWindow.LogicalPosition(x, y));
-    }
-
-    await win.show();
-    pill.active = true;
-  } catch (err) {
-    document.body.classList.remove('pill');
-    logEntry(`pill mode failed: ${err.message ?? err}`, 'note');
-  } finally {
-    pill.entering = false;
-  }
-}
-
-async function exitPill() {
-  if (!tauriWindow || !pill.active) return;
-  pill.active = false;
-  document.body.classList.remove('pill');
-
-  const win = tauriWindow.getCurrentWindow();
-  try {
-    await win.setAlwaysOnTop(false);
-    await win.setVisibleOnAllWorkspaces(false);
-    if (pill.saved) {
-      const { size, position } = pill.saved;
-      await win.setSize(new tauriWindow.PhysicalSize(size.width, size.height));
-      await win.setPosition(new tauriWindow.PhysicalPosition(position.x, position.y));
-    }
-    await win.show();
-    await win.setFocus();
-  } catch (err) {
-    logEntry(`restoring from pill failed: ${err.message ?? err}`, 'note');
-  }
-}
-
-function updatePillText() {
-  const text = document.getElementById('pill-text');
-  if (!text) return;
-  text.textContent = state.armed ? 'armed — watching' : 'watching (disarmed)';
-  document.body.classList.toggle('pill-armed', state.armed);
-}
-
-if (tauriWindow) {
-  // Covered, minimised, or moved behind a full-screen app while detecting:
-  // become the pill rather than letting the page freeze.
-  document.addEventListener('visibilitychange', () => {
-    if (document.hidden && state.cameraOn && !pill.active) enterPill();
-  });
-
-  document.getElementById('pill')?.addEventListener('click', () => exitPill());
-
-  // Called from Rust when the user closes the window. With the camera off
-  // there is nothing to keep alive, so plain hiding is correct there.
-  window.__gestureCloseRequested = () => {
-    if (state.cameraOn) enterPill();
-    else tauriWindow.getCurrentWindow().hide();
-  };
-  // Called from Rust when the tray's "Show Gesture" is used.
-  window.__gesturePillExit = () => exitPill();
-}
-
 // Heartbeat: while the camera is on, tell the server every 2s that this page's
 // main thread is alive, what the frame rate is, and whether the page thinks it
 // is visible. This exists to make "gestures die when the window is hidden"
@@ -995,7 +893,6 @@ if (tauriWindow) {
 // stopped receiving camera frames; heartbeats and fps both healthy mean the
 // pipeline is fine and the problem is at or past the gesture POST.
 setInterval(() => {
-  if (pill.active) updatePillText();
   if (!state.cameraOn) return;
   fetch('/heartbeat', {
     method: 'POST',

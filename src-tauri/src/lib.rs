@@ -1,15 +1,24 @@
-// Tauri shell around the existing app.
+// Menu-bar host for the gesture server.
 //
-// Deliberately thin. The recogniser is still the JavaScript in public/, and the
-// key pressing is still the Node server in server/ — this process starts that
-// server, points a webview at it, and adds the three things a browser tab
-// cannot do: live in the menu bar, start at login, and keep running with no
-// window on screen.
+// This process owns no window. It starts the Node server, keeps it alive, puts
+// an icon in the menu bar, and opens the page in Chrome — it does not render
+// the page itself.
 //
-// The window loads http://127.0.0.1:4321 rather than bundled assets. That keeps
-// the page same-origin with the server it talks to, so nothing in public/ has to
-// change, and it keeps the page on an http://127.0.0.1 origin — which macOS
-// treats as a secure context, the precondition for getUserMedia.
+// That is a deliberate retreat from wrapping the UI in a webview, and it is
+// forced by one measured fact: Tauri's WKWebView does not implement
+// MediaStreamTrackProcessor. Reported by the page itself at load:
+//
+//     engine=tauri-webview  hasMSTP=false   -> detection pumped by
+//         requestVideoFrameCallback on the main thread, which WebKit freezes
+//         for any non-visible page
+//     engine=browser        hasMSTP=true    -> detector runs in a Worker, fed
+//         by MediaStreamTrackProcessor, unaffected by visibility
+//
+// So in a webview the app can only detect while a window is on screen, and in
+// Chrome it detects with the window minimised. Rendering the UI here would mean
+// reimplementing camera capture and inference natively to reach a place Chrome
+// already occupies. The menu bar, start-at-login and server supervision are
+// worth having natively; the webview was not.
 
 use std::net::TcpStream;
 use std::path::PathBuf;
@@ -18,22 +27,18 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-/// Set only by Quit, and read by the window's close handler.
-///
-/// `app.exit()` asks every window to close, which fires the same
-/// `CloseRequested` event the red button does. That handler prevents the close
-/// so the app can live in the menu bar — and without this flag it prevents the
-/// *quit* too, so Quit Gesture silently did nothing.
-static QUITTING: AtomicBool = AtomicBool::new(false);
-
 use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::TrayIconBuilder;
-use tauri::{Manager, RunEvent, WindowEvent};
+use tauri::{Manager, RunEvent};
 use tauri_plugin_autostart::{ManagerExt, MacosLauncher};
 
 const SERVER_HOST: &str = "127.0.0.1";
 const SERVER_PORT: u16 = 4321;
 const SERVER_URL: &str = "http://127.0.0.1:4321";
+
+/// Set only by Quit. With no windows, the app would otherwise be asked to exit
+/// the moment it finishes launching, so exit is refused unless this is set.
+static QUITTING: AtomicBool = AtomicBool::new(false);
 
 /// The Node server, so it can be killed when this process exits.
 ///
@@ -54,12 +59,12 @@ fn server_is_up() -> bool {
 /// Locate the project directory holding server/index.js.
 ///
 /// Checked in order rather than assumed, because the answer differs between
-/// `tauri dev` (the repo, two directories up from the binary) and a bundled
+/// `tauri dev` (the repo, some directories up from the binary) and a bundled
 /// .app (a resource directory inside the bundle). GESTURE_ROOT overrides both.
 ///
 /// NOTE: bundling the Node runtime and node_modules into the .app is not solved
 /// here — a release build still expects a working `node` on PATH and the
-/// project directory present. That is the next phase's problem, not this one's.
+/// project directory present.
 fn find_project_root(app: &tauri::AppHandle) -> Option<PathBuf> {
     if let Ok(root) = std::env::var("GESTURE_ROOT") {
         let path = PathBuf::from(root);
@@ -93,8 +98,7 @@ fn find_project_root(app: &tauri::AppHandle) -> Option<PathBuf> {
 /// An app launched from Finder or at login inherits launchd's PATH —
 /// /usr/bin:/bin:/usr/sbin:/sbin — which contains none of the places people
 /// actually install Node. `Command::new("node")` therefore works from a
-/// terminal and silently fails from a double-click, which is the worst kind of
-/// works-on-my-machine. GESTURE_NODE overrides the search.
+/// terminal and silently fails from a double-click. GESTURE_NODE overrides.
 fn find_node() -> Option<PathBuf> {
     if let Ok(node) = std::env::var("GESTURE_NODE") {
         let path = PathBuf::from(node);
@@ -115,8 +119,6 @@ fn find_node() -> Option<PathBuf> {
         }
     }
 
-    // Fall back to PATH for the terminal-launched case, plus nvm-style setups
-    // where the shell profile is the only thing that knows the location.
     which_on_path("node")
 }
 
@@ -160,9 +162,9 @@ fn start_server(app: &tauri::AppHandle) -> Option<Child> {
         root.display()
     );
     // The child watches this pid and exits when it dies. The RunEvent::Exit
-    // cleanup below covers a graceful quit, but not a SIGTERM/kill — which is
-    // exactly how an orphan node ended up holding port 4321 with its TCC
-    // permissions attributed to a dead app, failing every osascript call.
+    // cleanup below covers a graceful quit, but not a SIGKILL — which is how an
+    // orphan node ended up holding port 4321 with its TCC permissions
+    // attributed to a dead app, failing every osascript call.
     match Command::new(&node)
         .arg("server/index.js")
         .env("GESTURE_PARENT_PID", std::process::id().to_string())
@@ -177,11 +179,6 @@ fn start_server(app: &tauri::AppHandle) -> Option<Child> {
     }
 }
 
-/// Block until the server answers, so the webview is not pointed at a dead port.
-///
-/// The window starts hidden and is only shown after this returns, because a
-/// webview that loads a connection error shows it until something reloads it —
-/// and the first thing a new user would see is a browser error page.
 fn wait_for_server(timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
@@ -193,14 +190,29 @@ fn wait_for_server(timeout: Duration) -> bool {
     false
 }
 
-fn show_main_window(app: &tauri::AppHandle) {
-    if let Some(window) = app.get_webview_window("main") {
-        // The page may currently be the pill; let it restore its own geometry
-        // first, then show/focus regardless so a wedged page cannot make the
-        // window unreachable.
-        let _ = window.eval("window.__gesturePillExit && window.__gesturePillExit()");
-        let _ = window.show();
-        let _ = window.set_focus();
+/// Open the page in Chrome, in an app-style window with no tab strip or
+/// address bar.
+///
+/// Chrome specifically, not the default browser: the whole reason the UI lives
+/// outside this process is that Chrome implements MediaStreamTrackProcessor and
+/// WebKit does not. Handing the page to Safari would reintroduce exactly the
+/// limitation this design exists to avoid, so Safari is not a silent fallback —
+/// if Chrome is missing we say so and let the default browser have it, where at
+/// least the page still works while visible.
+fn open_ui() {
+    let chrome = Command::new("open")
+        .args(["-na", "Google Chrome", "--args", &format!("--app={SERVER_URL}")])
+        .status();
+
+    match chrome {
+        Ok(status) if status.success() => {}
+        _ => {
+            eprintln!(
+                "gesture: could not open Google Chrome — falling back to the default browser. \
+                 Note that detection only continues while the window is visible outside Chrome."
+            );
+            let _ = Command::new("open").arg(SERVER_URL).spawn();
+        }
     }
 }
 
@@ -216,18 +228,11 @@ pub fn run() {
         .manage(ServerProcess(Mutex::new(None)))
         .setup(|app| {
             let handle = app.handle().clone();
-
             *app.state::<ServerProcess>().0.lock().unwrap() = start_server(&handle);
 
             // ---------------------------------------------------------- tray
-            let show = MenuItem::with_id(app, "show", "Show Gesture", true, None::<&str>)?;
-            let browser = MenuItem::with_id(
-                app,
-                "browser",
-                "Open in Browser…",
-                true,
-                None::<&str>,
-            )?;
+            let open = MenuItem::with_id(app, "open", "Open Gesture", true, None::<&str>)?;
+
             // Reflects the real state rather than a stored preference, so the
             // tick is still right if the LaunchAgent was removed by hand.
             let launches_at_login = app.autolaunch().is_enabled().unwrap_or(false);
@@ -246,8 +251,7 @@ pub fn run() {
             let menu = Menu::with_items(
                 app,
                 &[
-                    &show,
-                    &browser,
+                    &open,
                     &first_separator,
                     &autostart,
                     &second_separator,
@@ -273,13 +277,7 @@ pub fn run() {
                 .menu(&menu)
                 .show_menu_on_left_click(true)
                 .on_menu_event(move |app, event| match event.id.as_ref() {
-                    "show" => show_main_window(app),
-                    // An escape hatch that matters more than it looks: if the
-                    // webview cannot reach the camera, the same page still works
-                    // in a real browser, and the rest of the app is unaffected.
-                    "browser" => {
-                        let _ = Command::new("open").arg(SERVER_URL).spawn();
-                    }
+                    "open" => open_ui(),
                     "autostart" => {
                         let launcher = app.autolaunch();
                         let result = if launcher.is_enabled().unwrap_or(false) {
@@ -301,63 +299,14 @@ pub fn run() {
                 })
                 .build(app)?;
 
-            // ------------------------------------------------- window & server
-            if let Some(window) = app.get_webview_window("main") {
-                // Closing the window must not quit — detection is supposed to
-                // keep running while you work — but it must not plain-hide
-                // either: WKWebView stops feeding camera frames to a hidden
-                // page, and this webview has no worker path to survive that.
-                // The page decides: camera running -> shrink to the pill;
-                // camera off -> hide itself. Rust only hides directly when the
-                // page cannot be reached at all.
-                let close_target = window.clone();
-                window.on_window_event(move |event| {
-                    if let WindowEvent::CloseRequested { api, .. } = event {
-                        // Let the window actually close when this is a quit
-                        // rather than the red button, or the app can never exit.
-                        if QUITTING.load(Ordering::SeqCst) {
-                            return;
-                        }
-                        api.prevent_close();
-                        // The fallback lives inside the script: eval() only
-                        // reports whether the script was queued, so a page
-                        // without these hooks must hide itself.
-                        let handed_off = close_target
-                            .eval(
-                                "if (window.__gestureCloseRequested) { window.__gestureCloseRequested(); } \
-                                 else if (window.__TAURI__) { window.__TAURI__.window.getCurrentWindow().hide(); }",
-                            )
-                            .is_ok();
-                        if !handed_off {
-                            let _ = close_target.hide();
-                        }
-                    }
-                });
-            }
-
+            // Open the UI once the server can actually answer, so the browser
+            // does not land on a connection error and need a manual reload.
             std::thread::spawn(move || {
                 if wait_for_server(Duration::from_secs(15)) {
-                    if let Some(window) = handle.get_webview_window("main") {
-                        // A real navigation, not an eval'd location.reload().
-                        // The window is created before the server is listening,
-                        // so the webview is sitting on WebKit's "cannot connect"
-                        // page — and script injected into *that* page never runs,
-                        // which left the window blank once the server came up.
-                        match SERVER_URL.parse() {
-                            Ok(url) => {
-                                if let Err(err) = window.navigate(url) {
-                                    eprintln!("gesture: could not load {SERVER_URL}: {err}");
-                                }
-                            }
-                            Err(err) => eprintln!("gesture: bad server url: {err}"),
-                        }
-                        println!("gesture: server is up, loaded {SERVER_URL}");
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                    }
+                    println!("gesture: server is up, opening {SERVER_URL}");
+                    open_ui();
                 } else {
                     eprintln!("gesture: the server never came up on {SERVER_URL}");
-                    show_main_window(&handle);
                 }
             });
 
@@ -365,15 +314,23 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("failed to build the Gesture app")
-        .run(|app, event| {
-            // Kill the server on the way out, including on a SIGINT from a
-            // terminal — an orphan holding port 4321 is a confusing thing to
-            // debug the next time the app starts.
-            if let RunEvent::Exit = event {
+        .run(|app, event| match event {
+            // With no windows there is nothing keeping the app alive, so it is
+            // asked to exit as soon as it has launched. Refuse, except when the
+            // request came from Quit.
+            RunEvent::ExitRequested { api, .. } => {
+                if !QUITTING.load(Ordering::SeqCst) {
+                    api.prevent_exit();
+                }
+            }
+            // Kill the server on the way out — an orphan holding port 4321 is a
+            // confusing thing to debug the next time the app starts.
+            RunEvent::Exit => {
                 if let Some(mut child) = app.state::<ServerProcess>().0.lock().unwrap().take() {
                     let _ = child.kill();
                     let _ = child.wait();
                 }
             }
+            _ => {}
         });
 }

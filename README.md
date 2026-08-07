@@ -17,9 +17,9 @@ browser: camera -> landmarks -> gesture name  --POST-->  server: shortcut -> key
 
 ## Desktop app (Tauri)
 
-A thin native shell lives in [`src-tauri/`](src-tauri). It adds the three things a
-browser tab cannot do — a menu bar item, start-at-login, and staying alive with
-no window — while the recogniser and the key pressing stay exactly as they are.
+A native menu-bar host lives in [`src-tauri/`](src-tauri). It **renders nothing**:
+it starts the Node server, keeps it alive, sits in the menu bar, starts at login,
+and opens the page in Chrome.
 
 ```bash
 npm run app:dev     # run it
@@ -28,38 +28,70 @@ npm run app:build   # produce Gesture.app
 
 Needs a Rust toolchain (<https://rustup.rs>) on top of the normal setup.
 
-**How it fits together.** The shell starts `node server/index.js` as a child
-process and points a webview at `http://127.0.0.1:4321` — the same page you'd
-open in a browser. Nothing in `public/` or `server/` changes. Loading over
-`http://127.0.0.1` rather than bundled assets keeps the page same-origin with the
-server it POSTs to, and keeps it on an origin macOS treats as a secure context,
-which `getUserMedia` requires. If a server is already listening, the app attaches
-to it instead of starting a second one, so `npm start` in a terminal and the app
-remain interchangeable.
+### Why the UI is in Chrome and not in the app
 
-Closing the window hides it to the menu bar rather than quitting — detection is
-meant to keep running while you work. **Quit Gesture** in the tray menu is the
-way out, and it kills the server it started.
+Because only one of the two engines can detect while the window is not visible,
+and the page reports which it is at load:
 
-**The permissions move with it.** The Accessibility grant follows the
-*responsible* app, so once you run the bundled app it is `Gesture` that needs
-ticking, not your editor. `Info.plist` also declares `NSCameraUsageDescription`
-and `NSAppleEventsUsageDescription`; the second is what lets the Automation
-prompt appear for the `osascript` Space strategy, and without it Space switching
-fails with error 1002.
+| Engine | `MediaStreamTrackProcessor` | Detection path | Works hidden |
+| --- | --- | --- | --- |
+| Chrome | **yes** | Worker fed by `MediaStreamTrackProcessor` | **yes** |
+| Tauri's WKWebView | **no** | `requestVideoFrameCallback` on the main thread | no |
 
-**Known risk — the camera in the webview.** macOS `getUserMedia` inside a
-WKWebView is the subject of open Tauri bugs
-([wry#1195](https://github.com/tauri-apps/wry/issues/1195),
-[tauri#11951](https://github.com/tauri-apps/tauri/issues/11951)), and this app is
-a camera app. Verify it before building anything else on top: run
-`npm run app:dev` and click **Start camera**. The tray has an **Open in Browser…**
-item as the fallback — the same page works in Chrome, and the menu bar,
-auto-launch and background behaviour are unaffected either way.
+WebKit freezes `requestVideoFrameCallback` for any non-visible page, so in a
+webview the app can only detect while a window is on screen. Chrome keeps
+detecting with the window minimised, because browsers do not throttle workers and
+the visibility handler deliberately does nothing in worker mode.
 
-Bundling the Node runtime into the `.app` is **not** solved yet: a built app
-still expects `node` on `PATH` and the project directory present. Set
-`GESTURE_ROOT` if it cannot find `server/index.js`.
+`backgroundThrottling: "disabled"` does not close the gap — measured, it keeps
+the main thread scheduled (heartbeats keep arriving) but does not restore frame
+delivery (`msSinceFrame` grows without bound). Rendering the UI natively would
+mean reimplementing camera capture and inference in Rust to reach a place Chrome
+already occupies. The menu bar, start-at-login and server supervision are worth
+having natively; the webview was not.
+
+Confirm any of this yourself with `GET /recent`, which records each client's
+engine and capabilities.
+
+### What the host does
+
+- Starts `node server/index.js` as a child, or attaches to a server already on
+  the port — so `npm start` in a terminal and the app stay interchangeable.
+- Opens <http://127.0.0.1:4321> in Chrome as an app window (no tabs, no address
+  bar) once the server answers. **Minimise it and gestures keep firing.**
+- **Start at Login**, reflecting the LaunchAgent's real state rather than a
+  stored preference.
+- **Quit Gesture** exits and kills the server it started. The server also
+  watches its parent and exits on its own if the app is force-killed, so no
+  orphan is left holding port 4321.
+
+If Chrome is missing it falls back to the default browser and says so — detection
+there only continues while the window is visible.
+
+### Permissions
+
+The Accessibility grant follows the *responsible* app, so when the server is
+started by the bundled app it is `Gesture` that needs ticking, not your editor.
+`Info.plist` declares `NSAppleEventsUsageDescription`, which is what lets the
+Automation prompt appear for the `osascript` Space strategy — without it Space
+switching fails with error 1002.
+
+**An unsigned build loses the grant every time it is rebuilt.** An ad-hoc
+signature's designated requirement is the hash of that exact binary:
+
+```
+$ codesign -d -r- Gesture.app
+designated => cdhash H"345fb776bbf1a998f3e9c28d2fec2642d5a58b9a"
+```
+
+So macOS treats each rebuild as a different application. If the box is already
+ticked and access is still denied, remove the entry with **−** and add it again.
+Signing with a real or self-signed certificate makes the requirement name the
+identifier and certificate instead, and the grant then survives rebuilds.
+
+Bundling the Node runtime into the `.app` is **not** solved: a built app still
+expects `node` on `PATH` and the project directory present. `GESTURE_ROOT` and
+`GESTURE_NODE` override the search.
 
 ## Requirements
 
