@@ -5,6 +5,7 @@
     "open_palm": "cmd+ctrl+q",
     "swipe_left": "space_right",
     "swipe_right": "space_left"
+    
   },
   "holdMs": {
     "default": 180,
