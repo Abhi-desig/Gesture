@@ -879,6 +879,17 @@ el.cameraBtn.addEventListener('click', () => {
 
 el.armBtn.addEventListener('click', () => setArmed(!state.armed));
 
+// Opt-in autostart, used by scripts/gesture-launch.sh so one keypress reaches a
+// live camera. The camera only — arming stays manual, because a page that armed
+// itself on load would press a real shortcut for any hand that happened to be in
+// frame before you'd even looked at the window.
+//
+// Calling getUserMedia without a user gesture is allowed once Chrome has
+// persisted the grant for this origin, so this is silent from the second launch
+// on; the first one still shows the permission prompt and startCamera() already
+// reports a refusal in the banner.
+if (new URLSearchParams(location.search).has('camera')) startCamera();
+
 // Escape is a one-way panic disarm. Deliberately not a toggle: this page is
 // normally the frontmost window, so a gesture that presses the panic key would
 // otherwise be able to toggle the page's own arm state.

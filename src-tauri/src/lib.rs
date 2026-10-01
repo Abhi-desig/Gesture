@@ -199,9 +199,18 @@ fn wait_for_server(timeout: Duration) -> bool {
 /// limitation this design exists to avoid, so Safari is not a silent fallback —
 /// if Chrome is missing we say so and let the default browser have it, where at
 /// least the page still works while visible.
+///
+/// `?camera=1` is the page's opt-in autostart, so the tray item and the
+/// scripts/gesture-launch.sh hotkey land in the same place: camera live, still
+/// disarmed. Without it the window opens needing a Start camera click.
 fn open_ui() {
     let chrome = Command::new("open")
-        .args(["-na", "Google Chrome", "--args", &format!("--app={SERVER_URL}")])
+        .args([
+            "-na",
+            "Google Chrome",
+            "--args",
+            &format!("--app={SERVER_URL}/?camera=1"),
+        ])
         .status();
 
     match chrome {
@@ -211,7 +220,9 @@ fn open_ui() {
                 "gesture: could not open Google Chrome — falling back to the default browser. \
                  Note that detection only continues while the window is visible outside Chrome."
             );
-            let _ = Command::new("open").arg(SERVER_URL).spawn();
+            let _ = Command::new("open")
+                .arg(format!("{SERVER_URL}/?camera=1"))
+                .spawn();
         }
     }
 }
