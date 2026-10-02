@@ -15,6 +15,15 @@ editing that file — the server picks it up on save, no restart and no code cha
 browser: camera -> landmarks -> gesture name  --POST-->  server: shortcut -> key press
 ```
 
+## Watch it
+
+[![gesture — a 71-second architecture walkthrough](docs/gesture-film.jpg)](docs/gesture-film.mp4)
+
+Seventy-one seconds on how this actually works, and the four problems that
+shaped it: why detection had to move into a Web Worker, why macOS refuses a
+Space switch it didn't press, why one backend structurally *cannot* send one,
+and how an open palm is told apart from a swipe that looks identical to it.
+
 Contributing, or want to know how it works inside?
 **[ARCHITECTURE.md](ARCHITECTURE.md)** covers the whole system end to end — the
 three processes, the detection pipeline, why the UI runs in Chrome, how key
