@@ -5,8 +5,8 @@ Watch your hand through the webcam, press keyboard shortcuts on your machine.
 A browser page reads 21 hand landmarks with MediaPipe and works out which gesture
 you're making. When it spots one, it sends the gesture *name* to a small Node
 server on localhost, which presses the matching shortcut. A fist pauses music, a
-pinch opens Mission Control, an open palm locks the screen, and a 4-finger swipe
-moves between Spaces.
+pinch arms and disarms the page, an open palm locks the screen, and a 4-finger
+swipe moves between Spaces.
 
 Every mapping lives in [`config.json`](config.json). Change what a gesture does by
 editing that file — the server picks it up on save, no restart and no code changes.
@@ -203,7 +203,7 @@ injected keystroke cannot switch Spaces. See *Why Spaces don't respond to a key 
 | Gesture      | Hand                                     | Default binding | Does                |
 | ------------ | ---------------------------------------- | --------------- | ------------------- |
 | `fist`       | all fingers curled                       | `audio_play`    | pause/play music    |
-| `pinch`      | thumb and index tip together             | `ctrl+up`       | Mission Control     |
+| `pinch`      | thumb and index tip together             | `toggle_armed`  | arm / disarm        |
 | `open_palm`  | all five out, **still for 1.2s**         | `cmd+ctrl+q`    | lock screen         |
 | `swipe_left` | four fingers out, hand travels **left**  | `space_right`   | next Space          |
 | `swipe_right`| four fingers out, hand travels **right** | `space_left`    | previous Space      |
@@ -228,8 +228,8 @@ kinds, and only the first works with no setup at all:
    delivered to the frontmost app, so it only pauses music if the music app is
    focused — and it won't be, because you'll be looking at this page.
 3. **App shortcuts** — need that app to be listening, and most are focus-only.
-   macOS ships **no** global mic-mute shortcut, which is why `pinch` defaults to
-   `ctrl+up` (Mission Control) rather than a mute. If you want mic mute, Zoom can
+   macOS ships **no** global mic-mute shortcut, which is one reason `pinch`
+   defaults to `toggle_armed` rather than a mute. If you want mic mute, Zoom can
    do it globally: **Zoom → Settings → Keyboard Shortcuts → Mute/Unmute My Audio →
    Enable Global Shortcut** (`cmd+shift+a`). Without that checkbox Zoom only hears
    it while focused. Teams' `cmd+shift+m` is focused-only with no global option.
@@ -294,7 +294,7 @@ A few other things worth knowing:
 {
   "gestures": {
     "fist": "audio_play",
-    "pinch": "ctrl+up",
+    "pinch": "toggle_armed",
     "open_palm": "cmd+ctrl+q",
     "swipe_left": "space_right",
     "swipe_right": "space_left"
