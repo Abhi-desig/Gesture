@@ -17,12 +17,13 @@ browser: camera -> landmarks -> gesture name  --POST-->  server: shortcut -> key
 
 ## Watch it
 
-[![gesture — a 71-second architecture walkthrough](docs/gesture-film.jpg)](docs/gesture-film.mp4)
+![gesture — twenty-one hand landmarks becoming a keyboard shortcut](docs/demo.gif)
 
-Seventy-one seconds on how this actually works, and the four problems that
-shaped it: why detection had to move into a Web Worker, why macOS refuses a
-Space switch it didn't press, why one backend structurally *cannot* send one,
-and how an open palm is told apart from a swipe that looks identical to it.
+Fifteen seconds of it running. The **[full 71-second walkthrough](docs/gesture-film.mp4)**
+has sound and covers the four problems that shaped the architecture: why
+detection had to move into a Web Worker, why macOS refuses a Space switch it
+didn't press, why one backend structurally *cannot* send one, and how an open
+palm is told apart from a swipe that looks identical to it.
 
 Contributing, or want to know how it works inside?
 **[ARCHITECTURE.md](ARCHITECTURE.md)** covers the whole system end to end — the
