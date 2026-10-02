@@ -15,6 +15,15 @@ editing that file — the server picks it up on save, no restart and no code cha
 browser: camera -> landmarks -> gesture name  --POST-->  server: shortcut -> key press
 ```
 
+## Watch it
+
+[![gesture — a 71-second architecture walkthrough](docs/gesture-film.jpg)](docs/gesture-film.mp4)
+
+Seventy-one seconds on how this actually works, and the four problems that
+shaped it: why detection had to move into a Web Worker, why macOS refuses a
+Space switch it didn't press, why one backend structurally *cannot* send one,
+and how an open palm is told apart from a swipe that looks identical to it.
+
 Contributing, or want to know how it works inside?
 **[ARCHITECTURE.md](ARCHITECTURE.md)** covers the whole system end to end — the
 three processes, the detection pipeline, why the UI runs in Chrome, how key
@@ -72,6 +81,44 @@ engine and capabilities.
 
 If Chrome is missing it falls back to the default browser and says so — detection
 there only continues while the window is visible.
+
+### Launching with one key
+
+`scripts/gesture-launch.sh` does the whole start-up from a cold machine: finds
+`node`, starts the server if nothing is on the port, waits until it answers
+`/health`, and opens Chrome at `?camera=1` — the page's opt-in autostart.
+
+The camera comes up live; the page stays **disarmed**. That split is deliberate:
+a page that armed itself on load would press a real shortcut for whatever hand
+happened to be in frame before you'd looked at the window. Pinch, or click Arm,
+when you mean it.
+
+Bind it to **⌃⌥⌘G**:
+
+1. **Shortcuts.app** → **File ▸ New Shortcut**, named `Launch Gesture`.
+2. One **Run Shell Script** action, shell `/bin/zsh`:
+   ```
+   exec ~/code/gesture/scripts/gesture-launch.sh
+   ```
+3. In the info pane (ⓘ) → **Add Keyboard Shortcut** → press ⌃⌥⌘G.
+
+Chrome asks for camera access on the first launch only; the grant is per-origin
+and persists, so every later press is silent. Pressing the key while a page is
+already running focuses that window instead of opening a second one.
+
+This runs with launchd's `PATH`, which is why the script looks for `node` at
+absolute paths rather than trusting `PATH`, and why failures arrive as a
+notification rather than on a stderr nobody is reading. Server output goes to
+`~/Library/Logs/gesture-server.log`. The script works equally well
+double-clicked or run from a terminal — the app bundle is not required.
+
+**The Accessibility grant follows whatever launched the script.** It is the
+responsible app that needs ticking, not `Gesture` — so a server started from the
+hotkey needs **Shortcuts** enabled in System Settings, one started from a
+terminal needs that terminal, and the two are separate entries. Gestures look
+perfectly healthy when this is wrong: the page detects, fires, and POSTs, and
+the server answers `accessibility-denied` while no key is ever pressed. `GET
+/health` names the app to enable, and so does the banner on the page.
 
 ### Permissions
 
