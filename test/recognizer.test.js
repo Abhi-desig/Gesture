@@ -315,3 +315,53 @@ test('a boolean canFire still works', () => {
   }
   assert.deepEqual(fired, ['fist']);
 });
+
+// ---------------------------------------------------------------- taught gestures
+
+const teachPeace = (recognizer, calls = []) => {
+  recognizer.setCustomClassifier((pts) => {
+    calls.push(pts);
+    return 'custom:peace';
+  });
+  return calls;
+};
+
+test('a taught gesture fires after the longer custom hold, not the built-in one', () => {
+  const r = new Recognizer();
+  teachPeace(r);
+  assert.deepEqual(run(r, hold({ pose: 'peace', ms: 250 })), [], '250ms is past 180 but short of 400');
+
+  const r2 = new Recognizer();
+  teachPeace(r2);
+  assert.deepEqual(run(r2, hold({ pose: 'peace', ms: 500 })), ['custom:peace']);
+});
+
+test('built-in poses win, and taught gestures are never asked while four fingers are out', () => {
+  // A taught match during the four-finger pose would fire while you were getting
+  // ready to swipe — the same collision open_palm has with swipes.
+  const r = new Recognizer();
+  const calls = teachPeace(r);
+  assert.deepEqual(run(r, hold({ pose: 'fist', ms: 500 })), ['fist']);
+  run(r, hold({ pose: 'four_finger', ms: 500 }));
+  assert.equal(calls.length, 0);
+});
+
+test('a taught shape swept across the frame does not fire', () => {
+  // Only the first frame is classified: speed is unknown until there are two.
+  // After that the stillness gate holds every pose back, taught ones included.
+  const r = new Recognizer();
+  const calls = teachPeace(r);
+  const fired = run(r, motionStream({ pose: 'peace', dx: RIGHTWARD }));
+  assert.ok(!fired.includes('custom:peace'));
+  assert.ok(calls.length <= 1, `consulted on ${calls.length} moving frames`);
+});
+
+test('holdMs can set every taught gesture, or one by name', () => {
+  const all = new Recognizer({ holdMs: { default: 180, custom: 100 } });
+  assert.equal(all.holdFor('custom:peace'), 100);
+
+  const one = new Recognizer({ holdMs: { default: 180, 'custom:peace': 900 } });
+  assert.equal(one.holdFor('custom:peace'), 900);
+  assert.equal(one.holdFor('custom:other'), 400, 'falls back to the custom default');
+  assert.equal(one.holdFor('fist'), 180, 'built-ins are unaffected');
+});

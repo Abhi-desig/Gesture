@@ -11,6 +11,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { DEFAULT_MAX_DISTANCE, isCustomGesture, CUSTOM_PREFIX } from '../public/custom-gestures.js';
 import { POSES } from '../public/gestures.js';
 import { DEFAULT_HOLD_MS } from '../public/recognizer.js';
 import { SWIPES } from '../public/swipe.js';
@@ -19,6 +20,17 @@ import { formatShortcut, parseShortcut } from './shortcut.js';
 
 /** Gesture names the browser page can actually emit. */
 export const KNOWN_GESTURES = [...POSES, ...SWIPES];
+
+/** Built in, or taught on the page (`custom:<name>`, which the server can't list). */
+const isEmittable = (name) => KNOWN_GESTURES.includes(name) || isCustomGesture(name);
+
+/** Why a binding's name will never be emitted. */
+function neverEmitted(name) {
+  if (name.startsWith(CUSTOM_PREFIX)) {
+    return `gesture "${name}" is not a valid taught-gesture name — use lowercase letters, digits and _, starting with a letter, like "custom:peace"`;
+  }
+  return `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}, or a taught gesture like "custom:peace"`;
+}
 
 const NUMBERS = {
   cooldownMs: { default: 1200, min: 0, max: 60000 },
@@ -32,6 +44,9 @@ const NUMBERS = {
   // above for why any of this is configurable rather than compiled in.
   dockSwipeVelocity: { default: 400, min: 1, max: 100000 },
   dockSwipeLingerMs: { default: 300, min: 0, max: 10000 },
+  // How close a hand must be to a taught gesture's samples to count, in palm
+  // lengths. See public/custom-gestures.js for how it's measured.
+  customMaxDistance: { default: DEFAULT_MAX_DISTANCE, min: 0.02, max: 2 },
 };
 
 const BOOLEANS = {
@@ -52,6 +67,10 @@ const BOOLEANS = {
   // implementations do; whether the WindowServer requires it is measured, not
   // assumed — `npm run probe:keysend -- --swipe-only`.
   dockSwipeWithTap: true,
+  // A short sound when a gesture lands, a low one when it doesn't. The window is
+  // normally hidden, so without this the only confirmation is the effect itself —
+  // and some effects, like a key the focused app ignores, have none.
+  feedbackSound: true,
 };
 
 /** Dock-swipe field layouts. See native/keysend.swift for what differs. */
@@ -146,8 +165,10 @@ function validateHoldMs(raw, errors) {
       errors.push(`"holdMs.${key}" must be a number between ${HOLD_MS_LIMITS.min} and ${HOLD_MS_LIMITS.max}`);
       continue;
     }
-    if (key !== 'default' && !KNOWN_GESTURES.includes(key)) {
-      errors.push(`"holdMs.${key}" is not a gesture — expected "default" or one of ${KNOWN_GESTURES.join(', ')}`);
+    if (key !== 'default' && key !== 'custom' && !isEmittable(key)) {
+      errors.push(
+        `"holdMs.${key}" is not a gesture — expected "default", "custom", a taught gesture, or one of ${KNOWN_GESTURES.join(', ')}`,
+      );
       continue;
     }
     out[key] = ms;
@@ -264,11 +285,7 @@ export function validate(raw) {
     // run through the key parser, which would reject it as an unknown key.
     if (isClientAction(combo)) {
       gestures[name] = { combo, client: true };
-      if (!KNOWN_GESTURES.includes(name)) {
-        warnings.push(
-          `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}`,
-        );
-      }
+      if (!isEmittable(name)) warnings.push(neverEmitted(name));
       continue;
     }
 
@@ -286,11 +303,7 @@ export function validate(raw) {
     } catch (err) {
       errors.push(`gesture "${name}": ${err.message}`);
     }
-    if (!KNOWN_GESTURES.includes(name)) {
-      warnings.push(
-        `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}`,
-      );
-    }
+    if (!isEmittable(name)) warnings.push(neverEmitted(name));
   }
 
   if (Object.keys(gestures).length === 0 && errors.length === 0) {
@@ -392,6 +405,7 @@ export class ConfigStore {
       // server will press, without hardcoding the list in two places.
       clientActions: CLIENT_ACTIONS,
       dryRun: settings.dryRun,
+      feedbackSound: settings.feedbackSound,
       tuning: {
         holdMs: settings.holdMs,
         cooldownMs: settings.cooldownMs,
@@ -403,6 +417,7 @@ export class ConfigStore {
         swipeMaxVerticalRatio: settings.swipeMaxVerticalRatio,
         swipeRearmRequiresPoseBreak: settings.swipeRearmRequiresPoseBreak,
         invertSwipeDirection: settings.invertSwipeDirection,
+        customMaxDistance: settings.customMaxDistance,
       },
     };
   }

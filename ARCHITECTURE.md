@@ -84,6 +84,8 @@ public/                 the page — runs in Chrome
   index.html            markup: video stage, readout, bindings table, log
   app.js                I/O only: camera, worker, canvas, fetch. No decisions.
   recognizer.js         pose runs, hold times, cooldowns  ← the decisions
+  custom-gestures.js    taught gestures: samples, nearest-neighbour match
+  feedback.js           sound cues: which response gets which sound
   gestures.js           landmarks -> pose name (pinch / open_palm / fist)
   swipe.js              landmarks over time -> swipe_left / swipe_right
   landmarks.js          geometry helpers: distances, palm centre, extension
@@ -105,7 +107,7 @@ server/                 the local server
 native/keysend.swift    key chords, media keys, dock swipes, direct Space calls
 src-tauri/              the menu-bar host (Rust)
 scripts/                build the helper, vendor the model, probe key-sending
-test/                   82 tests, no camera required
+test/                   103 tests, no camera required
 ```
 
 ---
@@ -197,6 +199,37 @@ sees) but not *recorded* — recording would burn its cooldown and, with
 `requireReleaseBetweenFires`, demand a full pose break, so the first real gesture
 after arming would be silently dropped. The exception is a pose bound to a client
 action, which must act while disarmed and therefore must take the cooldown.
+
+### Taught gestures
+
+`Recognizer.setCustomClassifier()` takes a function that names a taught gesture
+(`custom:<name>`) or returns null. It is consulted only after `classifyPose`
+finds nothing, and never while four fingers are out: that shape starts every
+swipe, so a taught match there would collide with swipes exactly the way
+open_palm does, without a hold time tuned to prevent it.
+
+The classifier is `CustomGestures.match()` in `custom-gestures.js`:
+
+- Each sample is the 21 landmarks relative to the wrist, divided by palm length.
+- Distance is root-mean-square over landmarks after rotating to best fit, with the
+  rotation clamped to ±30°. That forgives a tilted hand but keeps "thumb up" and
+  "thumb down" apart.
+- A match needs the nearest sample within `customMaxDistance` (0.18) **and**
+  clearly nearer than the next gesture's (at most 0.8×). A hand halfway between
+  two taught shapes matches neither.
+
+Recording refuses built-in shapes, the four-finger shape, samples that disagree
+with each other, and anything within the threshold of a gesture already taught,
+so a saved gesture is always one that can still fire. Samples live in the page's
+`localStorage`. The server only ever sees the name.
+
+### Sound cues
+
+`feedback.js` maps each `POST /gesture` response to a sound with `cueFor()`:
+rising for a press, falling for a refusal or a Space switch that didn't move,
+a tick for dry-run, silence for cooldown. The page plays it on the response, so
+the closed loop the server runs for Space switches is audible too. Web Audio
+needs a real click or key press before it can start; hand gestures don't count.
 
 ---
 
@@ -450,7 +483,7 @@ npm run app:build         # -> src-tauri/target/release/bundle/macos/Gesture.app
 ```
 
 ```bash
-npm test                  # 82 tests, no camera needed
+npm test                  # 103 tests, no camera needed
 npm run probe:keysend     # measure which key-sending method moves a Space
 ```
 
@@ -513,5 +546,7 @@ Things that will bite you, all of which bit someone already:
 - **Worker and page clocks differ.** Never pass a worker's `performance.now()` to
   the main thread.
 - **Rebuilding the app invalidates its permissions.** §10.
+- **Taught gestures never run in the four-finger pose.** Remove that guard and a
+  taught shape near it fires while you're getting ready to swipe.
 - **`app.exit()` fires `CloseRequested`.** A close handler that always prevents
   will cancel your quit.

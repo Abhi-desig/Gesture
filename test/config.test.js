@@ -119,3 +119,33 @@ test('a backend is not disqualified by a client action it cannot press', () => {
     assert.equal(backend.supports({ key: 'audio_play' }), true);
   });
 });
+
+test('a taught gesture can be bound without a warning; a malformed name explains the format', () => {
+  const ok = validate({ gestures: { 'custom:peace': 'audio_next' } });
+  assert.equal(ok.gestures['custom:peace'].combo, 'audio_next');
+  assert.deepEqual(ok.warnings, []);
+
+  const bad = validate({ gestures: { 'custom:Peace Sign': 'audio_next' } });
+  assert.match(bad.warnings.join('\n'), /not a valid taught-gesture name/);
+});
+
+test('holdMs accepts "custom" and taught gesture names, and still rejects typos', () => {
+  const { settings } = validate({ ...base, holdMs: { default: 180, custom: 500, 'custom:peace': 700 } });
+  assert.equal(settings.holdMs.custom, 500);
+  assert.equal(settings.holdMs['custom:peace'], 700);
+  assert.throws(() => validate({ ...base, holdMs: { default: 180, opne_palm: 1200 } }), /not a gesture/);
+});
+
+test('customMaxDistance and feedbackSound have defaults and reach the page', () => {
+  const { settings } = validate(base);
+  assert.equal(settings.customMaxDistance, 0.18);
+  assert.equal(settings.feedbackSound, true);
+  assert.throws(() => validate({ ...base, customMaxDistance: 5 }), /customMaxDistance/);
+  assert.throws(() => validate({ ...base, feedbackSound: 'loud' }), /must be true or false/);
+
+  const store = new ConfigStore(new URL('../config.json', import.meta.url).pathname);
+  store.load();
+  const payload = store.clientPayload();
+  assert.equal(typeof payload.feedbackSound, 'boolean');
+  assert.equal(typeof payload.tuning.customMaxDistance, 'number');
+});

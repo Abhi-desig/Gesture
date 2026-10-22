@@ -58,6 +58,10 @@
           <dd id="r-rearm">—</dd>
           <dt>Backend</dt>
           <dd id="r-backend">—</dd>
+          <dt>Taught match</dt>
+          <dd id="r-custom">—</dd>
+          <dt>Sound</dt>
+          <dd id="r-sound">—</dd>
         </dl>
 
         <h2>Bindings</h2>
@@ -68,6 +72,21 @@
           Edit <code>config.json</code> to change these. The server reloads it on
           save — no restart.
         </p>
+
+        <h2>Your gestures</h2>
+        <div class="teach">
+          <input id="teach-name" type="text" placeholder="name, e.g. peace" maxlength="32"
+            autocomplete="off" spellcheck="false" aria-label="Name for the new gesture" />
+          <button id="teach-btn" class="btn" type="button">Record</button>
+        </div>
+        <p id="teach-status" class="hint">
+          Hold a new hand shape in view and Gesture keeps five samples of it, in this
+          browser only. Then bind it in <code>config.json</code> as
+          <code>"custom:name": "…"</code>.
+        </p>
+        <ul id="custom-list" class="custom-list">
+          <li class="empty">None yet.</li>
+        </ul>
 
         <h2>Activity</h2>
         <ul id="log" class="log">

@@ -288,6 +288,38 @@ A few other things worth knowing:
   [Always-on detection](#always-on-detection) for why this isn't the obvious
   implementation.)
 
+### Teach your own gestures
+
+Under **Your gestures** on the page, type a name (lowercase, like `peace`),
+press **Record**, and hold a new hand shape in view. After a short countdown the
+page keeps five samples of it. Then bind it in `config.json` like any other
+gesture, with a `custom:` prefix:
+
+```json
+"gestures": { "custom:peace": "audio_next" }
+```
+
+- **Matching** is nearest-neighbour over the 21 landmarks, measured in palm
+  lengths and forgiving up to 30° of tilt. The **Taught match** row shows the
+  closest taught gesture and its distance next to `customMaxDistance`, so you can
+  see how close a near-miss was.
+- **Same safety rules** as the built-in set: arming, cooldown, and a hold time,
+  400 ms by default (`holdMs.custom`, or `holdMs["custom:peace"]` for one).
+- **Refused on purpose:** shapes that are already a built-in gesture, shapes too
+  close to one you've taught, and four fingers out, which is how every swipe
+  starts.
+- **Samples stay in this browser** (local storage for `127.0.0.1:4321`). Nothing
+  is sent anywhere. Clearing the site's data forgets them.
+
+### Sound
+
+A short rising sound when a gesture lands, a low falling one when it doesn't, and
+a tick for a dry-run. A desktop switch that macOS ignored sounds like a failure,
+because the server checks before it answers. Browsers only allow sound after a
+real click or key press on the page, so click the window once after it opens;
+the **Sound** row says when that's still needed. Turn it off with
+`"feedbackSound": false`.
+
 ## config.json
 
 ```json
@@ -497,7 +529,7 @@ was sent and macOS ignored it*, which are the two halves this bug kept blurring.
 | Setting | Meaning |
 | --- | --- |
 | `cooldownMs` | Minimum gap between two fires of the same gesture. |
-| `holdMs` | How long a pose must be held, in ms. A number applies to all; an object like `{ "default": 180, "open_palm": 1200 }` sets it per gesture. Swipes bypass this. |
+| `holdMs` | How long a pose must be held, in ms. A number applies to all; an object like `{ "default": 180, "open_palm": 1200 }` sets it per gesture, and `"custom"` sets it for every taught gesture (400 by default). Swipes bypass this. |
 | `requireReleaseBetweenFires` | Change pose before the same one can fire again. |
 | `stillnessMaxVelocity` | Above this palm speed, static poses are ignored. |
 | `swipeWindowMs` | How far back swipe travel is measured. |
@@ -515,6 +547,8 @@ was sent and macOS ignored it*, which are the two halves this bug kept blurring.
 | `dockSwipeWithTap` | Hold a session event tap while posting, as both reference implementations do. |
 | `verifySpaceSwitch` | After a Space-switching gesture, check whether the desktop actually moved and say so in the log. |
 | `dryRun` | Recognize and log gestures, press nothing. |
+| `customMaxDistance` | How close a hand must be to a taught gesture's samples to match, in palm lengths. Default 0.18. |
+| `feedbackSound` | Sound cues when a gesture lands or fails. Default `true`. |
 
 Speeds and distances are in **palm-widths** (multiples of wrist→middle-knuckle
 distance), so they hold at any distance from the camera. The page shows live palm
@@ -536,7 +570,10 @@ public/
   landmarks.js       shared geometry over the 21 landmarks
   gestures.js        static pose classification (pure)
   swipe.js           motion tracking (stateful)
-test/                node:test — 45 tests, no camera needed
+  recognizer.js      pose runs, hold times, cooldowns — the decisions
+  custom-gestures.js taught gestures: samples, nearest-neighbour matching
+  feedback.js        sound cues
+test/                node:test — 103 tests, no camera needed
 ```
 
 `npm test` covers the parts where the real logic lives: pose classification,

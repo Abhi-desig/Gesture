@@ -20,6 +20,7 @@
 // app.js owns only I/O (camera, canvas, fetch); every decision lives here, which
 // keeps the interactions above testable without a camera.
 
+import { isCustomGesture } from './custom-gestures.js';
 import { classifyPose, isFourFingerPose } from './gestures.js';
 import { SwipeTracker } from './swipe.js';
 
@@ -37,8 +38,12 @@ import { SwipeTracker } from './swipe.js';
  * a comfortable fist, raising your hand to swipe fires open_palm first, which by
  * default locks the screen. open_palm therefore wants a deliberate hold, long
  * enough that merely getting ready never reaches it.
+ *
+ * `custom` covers every taught gesture. Longer than a built-in pose because a
+ * nearest-neighbour match is a looser judgement than a geometric rule, so it is
+ * made to prove itself for longer before it presses anything.
  */
-export const DEFAULT_HOLD_MS = { default: 180, open_palm: 1200 };
+export const DEFAULT_HOLD_MS = { default: 180, open_palm: 1200, custom: 400 };
 
 // A floor so that on a very slow camera a single frame can't satisfy a hold.
 const MIN_FRAMES = 2;
@@ -60,8 +65,19 @@ export class Recognizer {
   constructor(tuning = {}) {
     this.tracker = new SwipeTracker();
     this.tuning = { ...DEFAULT_TUNING };
+    this.customClassifier = null;
     this.setTuning(tuning);
     this.reset();
+  }
+
+  /**
+   * Taught gestures, consulted only when no built-in pose matches.
+   *
+   * @param {((pts: {x:number,y:number}[]) => string|null)|null} classify Returns a
+   *   `custom:` gesture name, or null.
+   */
+  setCustomClassifier(classify) {
+    this.customClassifier = typeof classify === 'function' ? classify : null;
   }
 
   setTuning(tuning = {}) {
@@ -91,7 +107,9 @@ export class Recognizer {
   holdFor(pose) {
     const hold = this.tuning.holdMs;
     if (typeof hold === 'number') return hold;
-    return hold?.[pose] ?? hold?.default ?? DEFAULT_HOLD_MS.default;
+    if (hold?.[pose] !== undefined) return hold[pose];
+    if (isCustomGesture(pose)) return hold?.custom ?? DEFAULT_HOLD_MS.custom;
+    return hold?.default ?? DEFAULT_HOLD_MS.default;
   }
 
   /**
@@ -130,10 +148,24 @@ export class Recognizer {
 
     // Stillness gate: a moving hand is a swipe candidate, not a held pose.
     const still = motion.velocity <= this.tuning.stillnessMaxVelocity;
-    const pose = still && !this.poseSuppressed ? classifyPose(pts) : null;
+    const pose = still && !this.poseSuppressed ? this.#classify(pts, motion) : null;
 
     const gesture = this.#advanceRun(pose, now, canFire);
     return this.#view({ handPresent: true, motion, gesture, now });
+  }
+
+  /**
+   * Built-in poses first, then taught gestures.
+   *
+   * A taught gesture never runs while four fingers are out: that is how every
+   * swipe starts, so a match there would fire while you were getting ready to
+   * change desktops — the same collision open_palm has, with no hold time tuned
+   * to stop it.
+   */
+  #classify(pts, motion) {
+    const builtIn = classifyPose(pts);
+    if (builtIn || !this.customClassifier || motion.fourFinger) return builtIn;
+    return this.customClassifier(pts) ?? null;
   }
 
   /** Track the pose run and decide whether it should fire. */

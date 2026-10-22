@@ -3,6 +3,13 @@
 // I/O only. Every gesture decision lives in recognizer.js, which is unit tested;
 // this file drives the camera, paints the overlay, and talks to the server.
 
+import {
+  CustomGestures,
+  SAMPLES_PER_GESTURE,
+  SampleRecorder,
+  customName,
+} from './custom-gestures.js';
+import { Chime, cueFor } from './feedback.js';
 import { toPoints } from './landmarks.js';
 import { Recognizer } from './recognizer.js';
 
@@ -46,10 +53,24 @@ const el = {
   fourFinger: document.getElementById('r-fourfinger'),
   rearm: document.getElementById('r-rearm'),
   backend: document.getElementById('r-backend'),
+  custom: document.getElementById('r-custom'),
+  sound: document.getElementById('r-sound'),
+  teachName: document.getElementById('teach-name'),
+  teachBtn: document.getElementById('teach-btn'),
+  teachStatus: document.getElementById('teach-status'),
+  customList: document.getElementById('custom-list'),
 };
 
 const ctx = el.canvas.getContext('2d');
 const recognizer = new Recognizer();
+const chime = new Chime();
+
+// Taught gestures live in this browser only: they are samples of your hand, and
+// nothing about them needs to leave the machine. Bindings stay in config.json,
+// like every other gesture, so the server still decides what each one presses.
+const CUSTOM_STORAGE_KEY = 'gesture.customGestures.v1';
+const custom = loadCustomGestures();
+recognizer.setCustomClassifier((pts) => custom.match(pts));
 
 const state = {
   armed: false,
@@ -70,6 +91,11 @@ const state = {
   recent: null,
   recentAt: 0,
   fps: 0,
+  // Set while teaching a gesture: { name, phase: 'countdown'|'recording', recorder }.
+  // Nothing fires while it is set, so the shape you're teaching can't press keys.
+  recording: null,
+  // Closest taught gesture to the current hand, for the readout.
+  customNear: null,
 };
 
 // ---------------------------------------------------------------- config
@@ -81,7 +107,12 @@ function tuning() {
 function applyConfig(config) {
   state.config = config;
   recognizer.setTuning(config.tuning);
+  chime.enabled = config.feedbackSound !== false;
+  if (typeof config.tuning?.customMaxDistance === 'number') {
+    custom.maxDistance = config.tuning.customMaxDistance;
+  }
   renderBindings();
+  renderCustomGestures();
 }
 
 function renderBindings() {
@@ -182,6 +213,7 @@ function logEntry(what, kind = 'note') {
   right.textContent = new Date().toLocaleTimeString();
 
   li.append(left, right);
+  el.log.querySelector(':scope > .empty')?.remove();
   el.log.prepend(li);
   while (el.log.children.length > 40) el.log.lastElementChild.remove();
 }
@@ -212,6 +244,7 @@ async function send(name) {
       body: JSON.stringify({ gesture: name }),
     });
     const data = await res.json().catch(() => ({}));
+    chime.play(cueFor(res.status, data));
 
     if (data.fired) {
       if (data.shortcut === 'escape') lastSelfEscapeAt = performance.now();
@@ -229,6 +262,7 @@ async function send(name) {
       }
     }
   } catch (err) {
+    chime.play('failed');
     logEntry(`${name} failed: ${err.message}`, 'failed');
   }
 }
@@ -287,6 +321,172 @@ function simulate(name) {
   send(name);
 }
 
+// ---------------------------------------------------------------- taught gestures
+
+function loadCustomGestures() {
+  try {
+    const raw = localStorage.getItem(CUSTOM_STORAGE_KEY);
+    if (!raw) return new CustomGestures();
+    const { set: loaded, skipped } = CustomGestures.fromJSON(JSON.parse(raw));
+    if (skipped.length > 0) {
+      queueMicrotask(() => logEntry(`skipped unreadable taught gestures: ${skipped.join(', ')}`, 'failed'));
+    }
+    return loaded;
+  } catch {
+    // Storage blocked or corrupt: start empty rather than not at all.
+    return new CustomGestures();
+  }
+}
+
+function saveCustomGestures() {
+  try {
+    localStorage.setItem(CUSTOM_STORAGE_KEY, JSON.stringify(custom.toJSON()));
+    return true;
+  } catch (err) {
+    logEntry(`could not save taught gestures: ${err.message}`, 'failed');
+    return false;
+  }
+}
+
+function teachStatus(text, kind = '') {
+  el.teachStatus.textContent = text;
+  el.teachStatus.className = `hint ${kind}`.trim();
+}
+
+function renderCustomGestures() {
+  if (custom.size === 0) {
+    const li = document.createElement('li');
+    li.className = 'empty';
+    li.textContent = 'None yet.';
+    el.customList.replaceChildren(li);
+    return;
+  }
+
+  el.customList.replaceChildren(
+    ...custom.names.map((name) => {
+      const li = document.createElement('li');
+
+      const label = document.createElement('code');
+      label.textContent = name;
+
+      const detail = document.createElement('span');
+      detail.className = 'detail';
+      const combo = bindingFor(name);
+      const count = custom.samplesFor(name).length;
+      detail.textContent = `${count} sample${count === 1 ? '' : 's'} · ${combo ?? 'unbound'}`;
+      if (!combo) detail.classList.add('unbound');
+
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.textContent = 'delete';
+      remove.title = `Forget ${name}`;
+      remove.addEventListener('click', () => {
+        custom.remove(name);
+        saveCustomGestures();
+        renderCustomGestures();
+        logEntry(`forgot ${name}`, 'note');
+      });
+
+      li.append(label, detail, remove);
+      return li;
+    }),
+  );
+}
+
+const COUNTDOWN_STEPS = 3;
+const COUNTDOWN_STEP_MS = 700;
+
+function startRecording() {
+  if (!state.cameraOn) {
+    teachStatus('Start the camera first.', 'failed');
+    return;
+  }
+  const name = customName(el.teachName.value);
+  if (!name) {
+    teachStatus('Use a short name in lowercase letters, digits or _, starting with a letter — like "peace".', 'failed');
+    return;
+  }
+  if (custom.names.includes(name)) {
+    teachStatus(`${name} already exists — delete it first.`, 'failed');
+    return;
+  }
+
+  state.recording = { name, phase: 'countdown', recorder: null, timer: null };
+  el.teachBtn.textContent = 'Cancel';
+  el.teachName.disabled = true;
+
+  let remaining = COUNTDOWN_STEPS;
+  const tick = () => {
+    if (state.recording?.name !== name) return;
+    if (remaining > 0) {
+      teachStatus(`Get ready to hold the new shape in view… ${remaining}`);
+      remaining -= 1;
+      state.recording.timer = setTimeout(tick, COUNTDOWN_STEP_MS);
+      return;
+    }
+    state.recording.phase = 'recording';
+    state.recording.recorder = new SampleRecorder();
+    teachStatus(`Recording ${name}: 0/${SAMPLES_PER_GESTURE} — hold it steady.`);
+  };
+  tick();
+}
+
+function endRecording() {
+  clearTimeout(state.recording?.timer);
+  state.recording = null;
+  el.teachBtn.textContent = 'Record';
+  el.teachName.disabled = false;
+  // A gesture held through the recording shouldn't fire the moment it ends.
+  recognizer.reset();
+}
+
+function cancelRecording(reason) {
+  const name = state.recording?.name;
+  endRecording();
+  teachStatus(`${name} not saved: ${reason}.`, 'failed');
+}
+
+/** Fed every frame while teaching. Nothing fires until it finishes. */
+function recordFrame(pts, now) {
+  const rec = state.recording;
+  if (rec.phase !== 'recording') return;
+
+  const result = rec.recorder.offer(pts, now);
+  if (result.status === 'timeout') {
+    chime.play('failed');
+    cancelRecording(`only ${result.captured} of ${SAMPLES_PER_GESTURE} samples were usable`);
+    return;
+  }
+  if (result.status === 'recording') {
+    teachStatus(
+      `Recording ${rec.name}: ${result.captured}/${SAMPLES_PER_GESTURE} — ${result.problem ?? 'hold it steady'}.`,
+      result.problem ? 'failed' : '',
+    );
+    return;
+  }
+
+  const { name, recorder } = rec;
+  const problem = custom.recordingProblem(name, recorder.samples);
+  if (problem) {
+    chime.play('failed');
+    cancelRecording(problem);
+    return;
+  }
+
+  custom.add(name, recorder.samples);
+  endRecording();
+  const saved = saveCustomGestures();
+  renderCustomGestures();
+  chime.play('done');
+  logEntry(`taught ${name}`, 'note');
+  teachStatus(
+    bindingFor(name)
+      ? `Saved ${name}. It's bound to ${bindingFor(name)}.`
+      : `Saved ${name}${saved ? '' : ' for this session only'}. Bind it in config.json, e.g. "${name}": "audio_next".`,
+    'on',
+  );
+}
+
 // ---------------------------------------------------------------- detection
 
 /**
@@ -310,8 +510,10 @@ function handleLandmarks(landmarks, width, height) {
   // so the first real gesture after arming is not swallowed.
   const view = recognizer.update(pts, now, (pose) => state.armed || isClientGesture(pose));
   state.view = view;
+  state.customNear = custom.size > 0 ? custom.nearest(pts) : null;
 
-  if (view.gesture) onGestureDetected(view.gesture);
+  if (state.recording) recordFrame(pts, now);
+  else if (view.gesture) onGestureDetected(view.gesture);
 
   markFrame(now);
   draw(landmarks, drawMode(view), width, height);
@@ -462,6 +664,27 @@ function updateReadout() {
   // share one row rather than confusing the reader with two.
   const blocked = view ? !view.swipeArmed || view.poseSuppressed : false;
   set(el.rearm, blocked ? 'curl fingers' : 'ready', blocked ? 'off' : 'on');
+
+  // Shown as distance/threshold, like palm speed: the number that decides whether
+  // a taught gesture fires, so you can see how far off a near-miss was.
+  const near = state.customNear;
+  if (custom.size === 0) {
+    set(el.custom, 'none taught', 'off');
+  } else if (!view?.handPresent || !near) {
+    set(el.custom, '—', 'off');
+  } else {
+    const label = near.name.slice('custom:'.length);
+    set(
+      el.custom,
+      `${label} ${near.distance.toFixed(2)} / ${custom.maxDistance}`,
+      near.distance <= custom.maxDistance ? 'on' : '',
+    );
+  }
+
+  const sound = chime.status;
+  if (sound === 'on') set(el.sound, 'on', 'on');
+  else if (sound === 'off') set(el.sound, 'off', 'off');
+  else set(el.sound, 'click page to enable', 'moving');
 }
 
 // ---------------------------------------------------------------- camera
@@ -868,6 +1091,7 @@ function setArmed(armed, source = null) {
 
   const what = armed ? 'armed — gestures will press keys' : 'disarmed';
   logEntry(source ? `${source} -> ${what}` : what, source ? 'fired' : 'note');
+  chime.play(armed ? 'armed' : 'disarmed');
 }
 
 // ---------------------------------------------------------------- boot
@@ -878,6 +1102,23 @@ el.cameraBtn.addEventListener('click', () => {
 });
 
 el.armBtn.addEventListener('click', () => setArmed(!state.armed));
+
+// Browsers only start audio inside a real click or key press on the page, so the
+// first one of either unlocks the sound cues. Hand gestures don't count.
+for (const type of ['pointerdown', 'keydown']) {
+  document.addEventListener(type, () => {
+    chime.unlock();
+    updateReadout();
+  });
+}
+
+el.teachBtn.addEventListener('click', () => {
+  if (state.recording) cancelRecording('cancelled');
+  else startRecording();
+});
+el.teachName.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter' && !state.recording) startRecording();
+});
 
 // Opt-in autostart, used by scripts/gesture-launch.sh so one keypress reaches a
 // live camera. The camera only — arming stays manual, because a page that armed
@@ -921,6 +1162,7 @@ document.addEventListener('visibilitychange', () => {
   updateReadout();
 });
 
+renderCustomGestures();
 await pollConfig();
 await loadHealth();
 setInterval(pollConfig, 3000);
