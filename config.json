@@ -4,12 +4,13 @@
     "pinch": "toggle_armed",
     "open_palm": "cmd+ctrl+q",
     "swipe_left": "space_right",
-    "swipe_right": "space_left"
-    
+    "swipe_right": "space_left",
+    "point": "focus_screen"
   },
   "holdMs": {
     "default": 180,
-    "open_palm": 1200
+    "open_palm": 1200,
+    "point": 350
   },
   "cooldownMs": 1200,
   "requireReleaseBetweenFires": true,
@@ -28,6 +29,8 @@
   "dockSwipeLingerMs": 300,
   "dockSwipeWithTap": true,
   "verifySpaceSwitch": true,
+  "screenMaxAngle": 20,
+  "screenMovesPointer": true,
   "dryRun": false,
   "port": 4321
 }

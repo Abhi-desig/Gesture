@@ -71,6 +71,11 @@ const PRESETS = {
     fingers: { index: 'extended', middle: 'extended', ring: 'extended', pinky: 'extended' },
     thumb: 'tucked',
   },
+  // The index alone, straight out, thumb folded across the middle finger.
+  point: {
+    fingers: { index: 'extended', middle: 'curled', ring: 'curled', pinky: 'curled' },
+    thumb: 'tucked',
+  },
   // Two fingers out: matches none of the poses.
   peace: {
     fingers: { index: 'extended', middle: 'extended', ring: 'curled', pinky: 'curled' },

@@ -14,6 +14,7 @@ import path from 'node:path';
 import { DEFAULT_MAX_DISTANCE, isCustomGesture, CUSTOM_PREFIX } from '../public/custom-gestures.js';
 import { POSES } from '../public/gestures.js';
 import { DEFAULT_HOLD_MS } from '../public/recognizer.js';
+import { DEFAULT_SCREEN_OPTIONS } from '../public/screens.js';
 import { SWIPES } from '../public/swipe.js';
 import { BACKEND_NAMES } from './backends/index.js';
 import { formatShortcut, parseShortcut } from './shortcut.js';
@@ -47,6 +48,9 @@ const NUMBERS = {
   // How close a hand must be to a taught gesture's samples to count, in palm
   // lengths. See public/custom-gestures.js for how it's measured.
   customMaxDistance: { default: DEFAULT_MAX_DISTANCE, min: 0.02, max: 2 },
+  // How far your head may turn from a screen's calibrated direction and still
+  // count as facing it, in the loose degrees public/screens.js measures.
+  screenMaxAngle: { default: DEFAULT_SCREEN_OPTIONS.maxAngle, min: 2, max: 90 },
 };
 
 const BOOLEANS = {
@@ -71,6 +75,10 @@ const BOOLEANS = {
   // normally hidden, so without this the only confirmation is the effect itself —
   // and some effects, like a key the focused app ignores, have none.
   feedbackSound: true,
+  // Screen actions move the mouse pointer onto the window they focus or move,
+  // so the next scroll lands where your attention went rather than on the
+  // screen you left.
+  screenMovesPointer: true,
 };
 
 /** Dock-swipe field layouts. See native/keysend.swift for what differs. */
@@ -91,6 +99,21 @@ export const SPACE_STRATEGIES = ['osascript', 'direct', 'dockswipe'];
 export const CLIENT_ACTIONS = ['toggle_armed'];
 
 const isClientAction = (combo) => CLIENT_ACTIONS.includes(combo);
+
+/**
+ * Bindings that act on *a screen* rather than pressing a key.
+ *
+ * A key press is the same wherever you are looking. These are not: the page
+ * sends the display you were facing along with the gesture, and the server
+ * focuses that screen's front window — or, if you turned to another screen
+ * before letting go, moves the window there. See public/screens.js.
+ *
+ * Like client actions they never reach a keyboard backend, so a backend that
+ * cannot express them is not thereby unsuitable.
+ */
+export const SCREEN_ACTIONS = ['focus_screen'];
+
+const isScreenAction = (combo) => SCREEN_ACTIONS.includes(combo);
 
 /**
  * Which CGEventSource state table the native helper attributes its events to.
@@ -288,6 +311,11 @@ export function validate(raw) {
       if (!isEmittable(name)) warnings.push(neverEmitted(name));
       continue;
     }
+    if (isScreenAction(combo)) {
+      gestures[name] = { combo, screen: true };
+      if (!isEmittable(name)) warnings.push(neverEmitted(name));
+      continue;
+    }
 
     try {
       const parsed = parseShortcut(combo);
@@ -404,6 +432,9 @@ export class ConfigStore {
       // So the page can tell a binding it must perform itself from one the
       // server will press, without hardcoding the list in two places.
       clientActions: CLIENT_ACTIONS,
+      // Same reason: the page has to know which gestures need a screen sent
+      // with them, and start a carry when one fires.
+      screenActions: SCREEN_ACTIONS,
       dryRun: settings.dryRun,
       feedbackSound: settings.feedbackSound,
       tuning: {
@@ -418,6 +449,7 @@ export class ConfigStore {
         swipeRearmRequiresPoseBreak: settings.swipeRearmRequiresPoseBreak,
         invertSwipeDirection: settings.invertSwipeDirection,
         customMaxDistance: settings.customMaxDistance,
+        screenMaxAngle: settings.screenMaxAngle,
       },
     };
   }

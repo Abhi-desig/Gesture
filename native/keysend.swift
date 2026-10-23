@@ -21,15 +21,20 @@
 //   keysend media <nx-type> [cmd] [ctrl] [alt] [shift] [options]
 //   keysend swipe <left|right> [options]
 //   keysend space <left|right>              (direct WindowServer call)
+//   keysend displays                        (JSON list of displays)
+//   keysend focus <display-id> [--no-pointer]
+//   keysend move  <display-id> [--no-pointer]
 //
 // Options:
 //   --source=hid|combined|private|null   event source state table (default hid)
 //   --delay-us=<n>                       pause between posted events (default 12000)
 //   --variant=iss|mmf                    dock-swipe field layout (default iss)
 //   --velocity=<n>                       dock-swipe exit speed (default 400)
+//   --no-pointer                         focus/move leave the mouse pointer alone
 //   --verbose                            describe every posted event on stderr
 //
-// Exit: 0 on success, 1 on bad arguments or an event that could not be built.
+// Exit: 0 on success, 1 on bad arguments or an event that could not be built,
+// 4 when focus/move are refused because Accessibility is not granted.
 //
 // ---------------------------------------------------------------------------
 // A NOTE ON `swipe`, WHICH IS NOT A KEY PRESS
@@ -56,6 +61,7 @@
 // ---------------------------------------------------------------------------
 
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import Foundation
 
@@ -109,11 +115,14 @@ private var swipeVariant = "iss"
 private var lingerMs = 0.0
 private var withTap = false
 private var verbose = false
+private var movePointer = true
 private var positional: [String] = []
 
 for arg in CommandLine.arguments.dropFirst() {
   if arg == "--verbose" {
     verbose = true
+  } else if arg == "--no-pointer" {
+    movePointer = false
   } else if arg.hasPrefix("--source=") {
     sourceName = String(arg.dropFirst("--source=".count))
     guard sourceName == "null" || SOURCE_STATES[sourceName] != nil else {
@@ -148,13 +157,315 @@ for arg in CommandLine.arguments.dropFirst() {
   }
 }
 
+// ------------------------------------------------------------------ screens
+//
+// The spatial half: which displays exist, and acting on the window that sits on
+// one of them. All public API — CoreGraphics for the display and window lists,
+// the Accessibility API to focus and move windows — under the same
+// Accessibility grant that key presses already need. The window list itself
+// needs no Screen Recording permission: that only gates window *titles* from
+// CGWindowList, and titles here come from the Accessibility API instead.
+//
+// Coordinates are CoreGraphics global points: origin at the top-left of the
+// main display, y down. The Accessibility API reports window positions in the
+// same space, so the two compare directly. AppKit's NSScreen frames are the odd
+// one out — origin bottom-left — and are converted once, in visibleBounds.
+
+private let EXIT_NOT_TRUSTED: Int32 = 4
+
+/// Print one JSON object and exit. JSON rather than prose for the same reason
+/// `space status` is: the server reads this, and it should not parse sentences.
+private func emit(_ object: [String: Any]) -> Never {
+  guard
+    let data = try? JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+    let text = String(data: data, encoding: .utf8)
+  else { fail("could not encode the result as JSON") }
+  print(text)
+  exit(0)
+}
+
+private func activeDisplays() -> [CGDirectDisplayID] {
+  var count: UInt32 = 0
+  guard CGGetActiveDisplayList(0, nil, &count) == .success, count > 0 else { return [] }
+  var ids = [CGDirectDisplayID](repeating: 0, count: Int(count))
+  guard CGGetActiveDisplayList(count, &ids, &count) == .success else { return [] }
+  return Array(ids.prefix(Int(count)))
+}
+
+private func screenFor(_ id: CGDirectDisplayID) -> NSScreen? {
+  NSScreen.screens.first {
+    ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == id
+  }
+}
+
+/// The part of a display a window may occupy — below the menu bar, clear of the
+/// Dock — in CG global coordinates. Falls back to the whole display when AppKit
+/// has no screen for the id, which costs a window tucked under the menu bar and
+/// nothing worse.
+private func visibleBounds(_ id: CGDirectDisplayID) -> CGRect {
+  let full = CGDisplayBounds(id)
+  guard let screen = screenFor(id), let primary = NSScreen.screens.first else { return full }
+  let v = screen.visibleFrame
+  // AppKit measures y up from the bottom of the primary display, CG measures it
+  // down from the top. The primary display sits at the origin in both, so its
+  // height is the whole conversion.
+  return CGRect(x: v.minX, y: primary.frame.height - v.maxY, width: v.width, height: v.height)
+}
+
+private func describeDisplay(_ id: CGDirectDisplayID) -> [String: Any] {
+  let b = CGDisplayBounds(id)
+  return [
+    "id": Int(id),
+    "name": screenFor(id)?.localizedName ?? "Display \(id)",
+    "x": Double(b.minX),
+    "y": Double(b.minY),
+    "width": Double(b.width),
+    "height": Double(b.height),
+    "main": CGDisplayIsMain(id) != 0,
+    "builtin": CGDisplayIsBuiltin(id) != 0,
+  ]
+}
+
+/// Refuse loudly rather than act silently. Without Accessibility every AX call
+/// below fails with an error nobody reads, and the window simply stays put —
+/// the same "it fired and nothing happened" the key path already had to fix.
+private func requireTrust() {
+  guard AXIsProcessTrusted() else {
+    FileHandle.standardError.write(Data("keysend: Accessibility access is not granted\n".utf8))
+    exit(EXIT_NOT_TRUSTED)
+  }
+}
+
+private func axElement(_ element: AXUIElement, _ attribute: String) -> AXUIElement? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success,
+    let value, CFGetTypeID(value) == AXUIElementGetTypeID()
+  else { return nil }
+  return (value as! AXUIElement)
+}
+
+private func axElements(_ element: AXUIElement, _ attribute: String) -> [AXUIElement] {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+    return []
+  }
+  return (value as? [AXUIElement]) ?? []
+}
+
+private func axString(_ element: AXUIElement, _ attribute: String) -> String? {
+  var value: CFTypeRef?
+  guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+    return nil
+  }
+  return value as? String
+}
+
+private func axFrame(_ window: AXUIElement) -> CGRect? {
+  var positionRef: CFTypeRef?
+  var sizeRef: CFTypeRef?
+  guard
+    AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &positionRef) == .success,
+    AXUIElementCopyAttributeValue(window, kAXSizeAttribute as CFString, &sizeRef) == .success,
+    let positionRef, let sizeRef,
+    CFGetTypeID(positionRef) == AXValueGetTypeID(), CFGetTypeID(sizeRef) == AXValueGetTypeID()
+  else { return nil }
+  var origin = CGPoint.zero
+  var size = CGSize.zero
+  AXValueGetValue(positionRef as! AXValue, .cgPoint, &origin)
+  AXValueGetValue(sizeRef as! AXValue, .cgSize, &size)
+  return CGRect(origin: origin, size: size)
+}
+
+/// Size, then position, then size again. An app that keeps its window inside
+/// the current screen would otherwise clamp a size that only fits the
+/// destination, or refuse a position the old size would overflow — the same
+/// sequence window managers like Rectangle settled on.
+private func setFrame(_ window: AXUIElement, _ frame: CGRect) -> Bool {
+  var origin = frame.origin
+  var size = frame.size
+  guard let position = AXValueCreate(.cgPoint, &origin), let extent = AXValueCreate(.cgSize, &size)
+  else { return false }
+  AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, extent)
+  let moved = AXUIElementSetAttributeValue(window, kAXPositionAttribute as CFString, position)
+  AXUIElementSetAttributeValue(window, kAXSizeAttribute as CFString, extent)
+  return moved == .success
+}
+
+/// Make an app frontmost and one of its windows key.
+///
+/// AXFrontmost rather than NSRunningApplication.activate alone: since macOS 14
+/// activation is cooperative, and a background helper asking another app to
+/// come forward is exactly the request it is allowed to ignore. The
+/// Accessibility route is not subject to that, and activate() stays as a
+/// second voice for older systems.
+private func bringForward(pid: pid_t, window: AXUIElement?) {
+  let app = AXUIElementCreateApplication(pid)
+  AXUIElementSetAttributeValue(app, kAXFrontmostAttribute as CFString, kCFBooleanTrue)
+  if let window {
+    AXUIElementPerformAction(window, kAXRaiseAction as CFString)
+    AXUIElementSetAttributeValue(window, kAXMainAttribute as CFString, kCFBooleanTrue)
+  }
+  if #available(macOS 14.0, *) {
+    NSRunningApplication(processIdentifier: pid)?.activate()
+  } else {
+    NSRunningApplication(processIdentifier: pid)?.activate(options: [])
+  }
+}
+
+/// Put the pointer where the attention now is, so the next scroll or click lands
+/// on the window that just came forward instead of on the screen you left.
+private func warpPointer(to point: CGPoint) {
+  guard movePointer else { return }
+  CGWarpMouseCursorPosition(point)
+  // A warp briefly decouples the pointer from the physical mouse; re-coupling
+  // straight away means the next real movement isn't swallowed.
+  CGAssociateMouseAndMouseCursorPosition(1)
+}
+
+private func displayArgument() -> CGDirectDisplayID {
+  guard positional.count == 2, let raw = UInt32(positional[1]) else {
+    fail("\(positional[0]) takes one display id — see \"keysend displays\"")
+  }
+  guard activeDisplays().contains(raw) else {
+    fail("display \(raw) is not connected — see \"keysend displays\"")
+  }
+  return raw
+}
+
+/// The frontmost ordinary window whose centre lies on `display`.
+private func frontWindow(on display: CGDirectDisplayID) -> (pid: pid_t, frame: CGRect, owner: String)? {
+  let bounds = CGDisplayBounds(display)
+  let me = getpid()
+  // Front to back. Layer 0 is ordinary application windows; the menu bar, the
+  // Dock, notifications and floating panels all live on other layers.
+  let entries =
+    (CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID)
+      as? [[String: Any]]) ?? []
+  for entry in entries {
+    guard
+      (entry[kCGWindowLayer as String] as? Int) == 0,
+      let pid = entry[kCGWindowOwnerPID as String] as? pid_t, pid != me,
+      let rawBounds = entry[kCGWindowBounds as String] as? NSDictionary,
+      let frame = CGRect(dictionaryRepresentation: rawBounds as CFDictionary),
+      // Below this it is a tooltip-sized utility window, not something you
+      // would mean by "the window on that screen".
+      frame.width >= 80, frame.height >= 60,
+      (entry[kCGWindowAlpha as String] as? Double ?? 1) > 0
+    else { continue }
+    // A window belongs to the display holding its centre, which is also how
+    // macOS decides where a window straddling two screens "is".
+    if bounds.contains(CGPoint(x: frame.midX, y: frame.midY)) {
+      return (pid, frame, entry[kCGWindowOwnerName as String] as? String ?? "?")
+    }
+  }
+  return nil
+}
+
+if positional.first == "displays" {
+  // No permission needed: this is read-only and describes hardware, not windows.
+  let displays = activeDisplays().map(describeDisplay)
+  guard
+    let data = try? JSONSerialization.data(withJSONObject: displays, options: [.sortedKeys]),
+    let text = String(data: data, encoding: .utf8)
+  else { fail("could not encode the display list") }
+  print(text)
+  exit(0)
+}
+
+if positional.first == "focus" {
+  let display = displayArgument()
+  requireTrust()
+
+  guard let target = frontWindow(on: display) else {
+    // Nothing to focus — an empty desktop. Still worth moving the pointer:
+    // it is the one visible sign that the screen you looked at was the one
+    // that was picked.
+    let b = CGDisplayBounds(display)
+    warpPointer(to: CGPoint(x: b.midX, y: b.midY))
+    emit(["display": Int(display), "focused": false, "reason": "no window on that display"])
+  }
+
+  // Match the CoreGraphics window to its Accessibility element by frame: the
+  // two APIs share a coordinate space, and the public API offers no id that
+  // links them.
+  let windows = axElements(AXUIElementCreateApplication(target.pid), kAXWindowsAttribute)
+  let window = windows.first { w in
+    guard let f = axFrame(w) else { return false }
+    return abs(f.minX - target.frame.minX) < 4 && abs(f.minY - target.frame.minY) < 4
+      && abs(f.width - target.frame.width) < 4 && abs(f.height - target.frame.height) < 4
+  }
+
+  bringForward(pid: target.pid, window: window)
+  warpPointer(to: CGPoint(x: target.frame.midX, y: target.frame.midY))
+  emit([
+    "display": Int(display),
+    "focused": true,
+    "app": target.owner,
+    "window": window.flatMap { axString($0, kAXTitleAttribute) } ?? "",
+  ])
+}
+
+if positional.first == "move" {
+  let display = displayArgument()
+  requireTrust()
+
+  let system = AXUIElementCreateSystemWide()
+  guard let app = axElement(system, kAXFocusedApplicationAttribute) else {
+    fail("no application has focus")
+  }
+  guard
+    let window = axElement(app, kAXFocusedWindowAttribute) ?? axElement(app, kAXMainWindowAttribute)
+  else { fail("the focused application has no window to move") }
+  guard let frame = axFrame(window) else { fail("could not read the focused window's frame") }
+
+  var pid: pid_t = 0
+  AXUIElementGetPid(app, &pid)
+  let owner = NSRunningApplication(processIdentifier: pid)?.localizedName ?? "?"
+  let title = axString(window, kAXTitleAttribute) ?? ""
+
+  var source: CGDirectDisplayID = 0
+  var matches: UInt32 = 0
+  CGGetDisplaysWithPoint(CGPoint(x: frame.midX, y: frame.midY), 1, &source, &matches)
+  if matches == 0 { source = CGMainDisplayID() }
+  if source == display {
+    emit(["moved": false, "reason": "already on that display", "app": owner, "window": title,
+          "from": Int(source), "to": Int(display)])
+  }
+
+  // The same place, proportionally: a window in the top-left of one screen
+  // lands in the top-left of the other, measured in the room it had to move
+  // around in. Shrunk only when it would not fit at all.
+  let from = visibleBounds(source)
+  let to = visibleBounds(display)
+  let size = CGSize(width: min(frame.width, to.width), height: min(frame.height, to.height))
+  func share(_ offset: CGFloat, _ slack: CGFloat) -> CGFloat {
+    slack > 0 ? min(max(offset / slack, 0), 1) : 0
+  }
+  let rx = share(frame.minX - from.minX, from.width - frame.width)
+  let ry = share(frame.minY - from.minY, from.height - frame.height)
+  let landing = CGRect(
+    x: to.minX + rx * (to.width - size.width),
+    y: to.minY + ry * (to.height - size.height),
+    width: size.width,
+    height: size.height)
+
+  guard setFrame(window, landing) else {
+    // The usual cause, named: a full-screen window owns its own Space and
+    // cannot be positioned at all.
+    fail("\(owner) would not let its window move — a full-screen window cannot leave its Space")
+  }
+  bringForward(pid: pid, window: window)
+  warpPointer(to: CGPoint(x: landing.midX, y: landing.midY))
+  emit(["moved": true, "app": owner, "window": title, "from": Int(source), "to": Int(display)])
+}
+
 guard positional.count >= 2 else {
   fail("usage: keysend key|media <code> [cmd] [ctrl] [alt] [shift] [--source=…]")
 }
 
 let kind = positional[0]
 guard kind == "key" || kind == "media" || kind == "swipe" || kind == "space" else {
-  fail("first argument must be \"key\", \"media\", \"swipe\" or \"space\", got \"\(kind)\"")
+  fail("first argument must be key, media, swipe, space, displays, focus or move — got \"\(kind)\"")
 }
 
 // `swipe` and `space` take a direction; the other two take a numeric code.

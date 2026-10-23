@@ -1,4 +1,6 @@
-node_modules/
+# No trailing slash: a worktree links node_modules from the main checkout, and
+# a symlink is not a directory to git.
+node_modules
 
 # Local machine state, not project config
 .claude/settings.local.json
@@ -16,6 +18,9 @@ npm-debug.log*
 
 # Written by scripts/keysend-probe.mjs
 probe-result.json
+
+# Check-up and experiment results — people's own measurements, never committed
+experiments/
 
 # Tauri
 src-tauri/target/

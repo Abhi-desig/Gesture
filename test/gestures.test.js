@@ -23,8 +23,20 @@ test('classifies a pinch', () => {
   assert.equal(classifyPose(buildHand({ pose: 'pinch' })), 'pinch');
 });
 
-test('returns null for a pose that is none of the three', () => {
+test('returns null for a pose that is none of them', () => {
   assert.equal(classifyPose(buildHand({ pose: 'peace' })), null);
+});
+
+test('classifies a point', () => {
+  assert.equal(classifyPose(buildHand({ pose: 'point' })), 'point');
+});
+
+test('a hand on its way into a pinch is not a point', () => {
+  // Index out but bent toward the thumb, thumb not there yet: the frames just
+  // before every pinch. Read as a point, arming the page would first aim at a
+  // screen.
+  const closing = buildHand({ pose: 'point', fingers: { index: 'pinching' }, thumb: 'out' });
+  assert.equal(classifyPose(closing), null);
 });
 
 test('a fist is not misread as a pinch even though the thumb rests on the index', () => {
@@ -56,7 +68,7 @@ test('a pinch keeps the index reaching away from the wrist', () => {
 test('classification survives hand rotation', () => {
   // The extension test compares distances from the wrist rather than raw y
   // ordering, so tilting or inverting the hand must not change the result.
-  for (const pose of ['open_palm', 'fist', 'pinch']) {
+  for (const pose of ['open_palm', 'fist', 'pinch', 'point']) {
     for (const turns of [0, 0.25, 0.5, 0.75]) {
       const pts = buildHand({ pose, rotation: turns * 2 * Math.PI });
       assert.equal(classifyPose(pts), pose, `${pose} at ${turns} turns`);
@@ -65,7 +77,7 @@ test('classification survives hand rotation', () => {
 });
 
 test('classification is independent of distance from the camera', () => {
-  for (const pose of ['open_palm', 'fist', 'pinch']) {
+  for (const pose of ['open_palm', 'fist', 'pinch', 'point']) {
     for (const scale of [0.05, 0.12, 0.3]) {
       assert.equal(classifyPose(buildHand({ pose, scale })), pose, `${pose} at scale ${scale}`);
     }

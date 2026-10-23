@@ -13,6 +13,7 @@ import { resolveBackend } from './backends/index.js';
 import { ConfigStore } from './config.js';
 import { readSpaceHotkeys, readSpaces, responsibleApp, windowServerSpaces } from './macos.js';
 import { ACCESSIBILITY_HELP, accessibilityHelpFor, checkAccessibility } from './permissions.js';
+import { focusScreen, listDisplays, moveWindowTo } from './screens.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -233,6 +234,146 @@ app.get('/recent', (_req, res) => {
   res.json({ now: new Date().toISOString(), events: recent });
 });
 
+/**
+ * The displays, for the page's calibration and desk map.
+ *
+ * Read fresh every time: plugging in or unplugging a monitor while the server
+ * runs is ordinary, and a stale list would let a gesture aim at a screen that
+ * is no longer there.
+ */
+app.get('/screens', async (_req, res) => {
+  try {
+    res.json({ ok: true, displays: await listDisplays() });
+  } catch (err) {
+    res.json({ ok: false, displays: [], error: err.message });
+  }
+});
+
+/**
+ * A gesture bound to a screen action: focus the screen you were facing, or —
+ * with `drop` — move the focused window to it.
+ *
+ * This is the one place the wire carries more than a gesture name. It carries
+ * a display id too, because only the page can see your head. That widens what a
+ * compromised page could ask for by exactly one thing — which of your own
+ * screens — and the id is checked against the displays actually connected, so
+ * the worst it can do is bring a window you already have open forward.
+ */
+async function screenAction(req, res, name, binding) {
+  const { settings } = config.current;
+  const screen = req.body?.screen;
+  const drop = req.body?.drop === true;
+  const action = drop ? 'move_window' : binding.combo;
+
+  if (!Number.isInteger(screen) || screen <= 0) {
+    return res.status(400).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: `"${binding.combo}" needs the screen you were facing: {"gesture": "${name}", "screen": <display id>}`,
+    });
+  }
+
+  // Its own cooldown slot. A drop follows the focus that started it, often by
+  // less than a cooldown, and must not be refused as a repeat of it.
+  const slot = drop ? `${name}:drop` : name;
+  const now = performance.now();
+  const waited = now - (lastFired.get(slot) ?? -Infinity);
+  if (waited < settings.cooldownMs) {
+    remember({ type: 'gesture', gesture: name, action, outcome: 'cooldown' });
+    return res.status(429).json({
+      ok: true,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      reason: 'cooldown',
+      retryInMs: Math.ceil(settings.cooldownMs - waited),
+    });
+  }
+  lastFired.set(slot, now);
+
+  let display;
+  try {
+    display = (await listDisplays()).find((d) => d.id === screen);
+  } catch (err) {
+    lastFired.delete(slot);
+    return res.status(500).json({ ok: false, fired: false, gesture: name, shortcut: action, error: err.message });
+  }
+  if (!display) {
+    lastFired.delete(slot);
+    return res.status(404).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: `display ${screen} is not connected — calibrate your screens again`,
+    });
+  }
+
+  if (settings.dryRun) {
+    remember({ type: 'gesture', gesture: name, action, screen: display.name, outcome: 'dryRun' });
+    console.log(`[dry-run] ${name} -> ${action} (${display.name})`);
+    return res.json({
+      ok: true,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      screen: display.name,
+      reason: 'dryRun',
+    });
+  }
+
+  const access = await checkAccessibility();
+  if (access.granted === false) {
+    lastFired.delete(slot);
+    remember({ type: 'gesture', gesture: name, action, outcome: 'accessibility-denied' });
+    return res.status(503).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: 'macOS is refusing window control: Accessibility access is not granted',
+      help: accessibilityHelpFor(owner),
+    });
+  }
+
+  try {
+    const options = { movePointer: settings.screenMovesPointer };
+    const result = drop ? await moveWindowTo(screen, options) : await focusScreen(screen, options);
+    const what = result.app ? `${result.app}${result.window ? ` — ${result.window}` : ''}` : 'no window';
+    const effect = result.reason ? ` (${result.reason})` : '';
+    remember({ type: 'gesture', gesture: name, action, screen: display.name, outcome: 'done', app: result.app ?? null });
+    console.log(`${name} -> ${action}  ${display.name}: ${what}${effect}`);
+    return res.json({
+      ok: true,
+      fired: true,
+      gesture: name,
+      shortcut: action,
+      screen: display.name,
+      app: result.app ?? null,
+      window: result.window ?? null,
+      // Did anything actually change? A point at an empty desktop and a drop
+      // on the screen the window is already on both succeed and do nothing,
+      // and the page says which.
+      changed: drop ? result.moved === true : result.focused === true,
+      reason: result.reason ?? null,
+    });
+  } catch (err) {
+    lastFired.delete(slot);
+    remember({ type: 'gesture', gesture: name, action, outcome: 'error', error: err.message });
+    console.error(`${name} -> ${action} failed: ${err.message}`);
+    return res.status(err.notTrusted ? 503 : 500).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: err.message,
+      ...(err.notTrusted ? { help: accessibilityHelpFor(owner) } : {}),
+    });
+  }
+}
+
 app.post('/gesture', sameOriginOnly, async (req, res) => {
   const { gestures, settings } = config.current;
   const name = req.body?.gesture;
@@ -267,6 +408,8 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
       error: `"${binding.combo}" is a client-side action; the page performs it, the server does not`,
     });
   }
+
+  if (binding.screen) return screenAction(req, res, name, binding);
 
   // performance.now(), not Date.now(): this clock only ever moves forward. Wall
   // clock can step backwards on an NTP correction or a sleep/wake, which makes
@@ -442,6 +585,24 @@ const SPACE_SWITCH_COMBOS = new Set([
   'ctrl+right',
 ]);
 
+/** At startup: which screens a screen binding can reach, or why it can't. */
+async function screenPreflight() {
+  const bound = Object.entries(config.current.gestures).filter(([, g]) => g.screen);
+  if (bound.length === 0) return;
+
+  const names = bound.map(([name, g]) => `${name} -> ${g.combo}`).join(', ');
+  try {
+    const displays = await listDisplays();
+    console.log(`  Screens (${names}): ${displays.map((d) => d.name).join(', ')}`);
+    if (displays.length < 2) {
+      console.log('  Only one screen is connected, so there is nowhere to move a window to.');
+    }
+  } catch (err) {
+    console.log(`  !! ${names} cannot act on screens: ${err.message}`);
+  }
+  console.log('');
+}
+
 /**
  * Say out loud, at startup, the things that otherwise get guessed at.
  *
@@ -566,6 +727,7 @@ const server = app.listen(port, HOST, () => {
   console.log('');
 
   preflight();
+  screenPreflight();
 
   config.watch();
 });

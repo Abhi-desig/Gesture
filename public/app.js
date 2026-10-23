@@ -12,6 +12,7 @@ import {
 import { Chime, cueFor } from './feedback.js';
 import { toPoints } from './landmarks.js';
 import { Recognizer } from './recognizer.js';
+import { Carry, ScreenTracker, crowdedScreens, headPose, summarizeHead } from './screens.js';
 
 // Must match the version scripts/fetch-model.js vendors: a locally vendored
 // bundle paired with a different CDN wasm build fails in ways that look like a
@@ -22,6 +23,10 @@ const VENDOR_BASE = './vendor';
 const CDN_MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 const LOCAL_MODEL_URL = './models/hand_landmarker.task';
+
+const CDN_FACE_MODEL_URL =
+  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+const LOCAL_FACE_MODEL_URL = './models/face_landmarker.task';
 
 // How long a fired gesture stays shown in the Pose row. Swipes are instantaneous,
 // so without this they'd flash for a single frame and be unreadable.
@@ -59,11 +64,22 @@ const el = {
   teachBtn: document.getElementById('teach-btn'),
   teachStatus: document.getElementById('teach-status'),
   customList: document.getElementById('custom-list'),
+  head: document.getElementById('r-head'),
+  facing: document.getElementById('r-facing'),
+  deskMap: document.getElementById('desk-map'),
+  calibrateBtn: document.getElementById('calibrate-btn'),
+  screensStatus: document.getElementById('screens-status'),
 };
 
 const ctx = el.canvas.getContext('2d');
 const recognizer = new Recognizer();
 const chime = new Chime();
+const screenTracker = new ScreenTracker();
+const carry = new Carry();
+
+// Calibration lives in this browser, like taught gestures: it is a record of
+// where your head points, and it only means anything at this desk.
+const SCREENS_STORAGE_KEY = 'gesture.screens.v1';
 
 // Taught gestures live in this browser only: they are samples of your hand, and
 // nothing about them needs to leave the machine. Bindings stay in config.json,
@@ -96,6 +112,19 @@ const state = {
   recording: null,
   // Closest taught gesture to the current hand, for the readout.
   customNear: null,
+  // Head tracking: whether the worker could start it, the latest pose, and
+  // which calibrated screen that pose is facing.
+  headAvailable: false,
+  head: null,
+  facing: null,
+  // Connected displays as the server reports them, and where your head pointed
+  // when you looked at each. `screensError` explains an empty list.
+  displays: [],
+  screensError: null,
+  calibration: loadCalibration(),
+  // Set while calibrating: { queue, index, phase: 'countdown'|'recording',
+  // samples, results, timer }. Screen gestures do nothing meanwhile.
+  calibrating: null,
 };
 
 // ---------------------------------------------------------------- config
@@ -110,6 +139,9 @@ function applyConfig(config) {
   chime.enabled = config.feedbackSound !== false;
   if (typeof config.tuning?.customMaxDistance === 'number') {
     custom.maxDistance = config.tuning.customMaxDistance;
+  }
+  if (typeof config.tuning?.screenMaxAngle === 'number') {
+    screenTracker.setOptions({ maxAngle: config.tuning.screenMaxAngle });
   }
   renderBindings();
   renderCustomGestures();
@@ -232,7 +264,21 @@ let lastSelfEscapeAt = -Infinity;
 // key press, short enough that a real panic Escape a moment later still works.
 const SELF_ESCAPE_GRACE_MS = 400;
 
-async function send(name) {
+/** " on BenQ: Figma — Home", for a screen action's log line. */
+function screenDetail(data) {
+  if (!data.screen) return '';
+  if (!data.app) return ` on ${data.screen}${data.reason ? ` (${data.reason})` : ''}`;
+  return ` on ${data.screen}: ${data.app}${data.window ? ` — ${data.window}` : ''}`;
+}
+
+/**
+ * @param {string} name
+ * @param {object} [extra] More body fields. Only screen actions send any — the
+ *   display you were facing — and the server checks it against what is
+ *   actually connected.
+ * @returns {Promise<object|null>} The server's answer, or null if unreachable.
+ */
+async function send(name, extra = {}) {
   // Stamped before the request, not after: the server presses the key and then
   // responds, so the keystroke can reach this page before the response does.
   if (state.config?.gestures?.[name] === 'escape') lastSelfEscapeAt = performance.now();
@@ -241,18 +287,18 @@ async function send(name) {
     const res = await fetch('./gesture', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ gesture: name }),
+      body: JSON.stringify({ gesture: name, ...extra }),
     });
     const data = await res.json().catch(() => ({}));
     chime.play(cueFor(res.status, data));
 
     if (data.fired) {
       if (data.shortcut === 'escape') lastSelfEscapeAt = performance.now();
-      logEntry(`${name} -> ${data.shortcut}`, 'fired');
+      logEntry(`${name} -> ${data.shortcut}${screenDetail(data)}`, 'fired');
     } else if (data.reason === 'cooldown') {
       logEntry(`${name} skipped (cooldown ${data.retryInMs}ms)`, 'skipped');
     } else if (data.reason === 'dryRun') {
-      logEntry(`${name} -> ${data.shortcut} (dry-run)`, 'skipped');
+      logEntry(`${name} -> ${data.shortcut}${data.screen ? ` on ${data.screen}` : ''} (dry-run)`, 'skipped');
     } else {
       logEntry(`${name} failed: ${data.error ?? res.status}`, 'failed');
       if (res.status === 503) {
@@ -261,9 +307,11 @@ async function send(name) {
         showBanner('The key press failed.', data.error ?? 'see the server console', true);
       }
     }
+    return data;
   } catch (err) {
     chime.play('failed');
     logEntry(`${name} failed: ${err.message}`, 'failed');
+    return null;
   }
 }
 
@@ -301,12 +349,67 @@ function runClientAction(name) {
   return true;
 }
 
+/** Bindings that act on the screen you are facing. From the server, like clientActions. */
+function screenActions() {
+  return state.config?.screenActions ?? [];
+}
+
+function isScreenGesture(name) {
+  const combo = bindingFor(name);
+  return combo !== null && screenActions().includes(combo);
+}
+
+/** Head tracking is only started when something will use it. */
+function wantsHead() {
+  return Object.values(state.config?.gestures ?? {}).some((combo) => screenActions().includes(combo));
+}
+
+/**
+ * A screen gesture fired: bring forward the front window on the screen you are
+ * facing, and start carrying it in case you turn to another screen before
+ * letting go.
+ *
+ * Refuses out loud rather than guessing. Pointing while looking at your
+ * notebook, or before calibrating, should do nothing — and say why — rather
+ * than pick whichever screen is nearest.
+ */
+async function aimAtScreen(name) {
+  const refuse = (why) => {
+    chime.play('failed');
+    logEntry(`${name}: ${why}`, 'failed');
+  };
+  if (state.calibrating) return refuse('finish calibrating first');
+  if (!state.headAvailable) return refuse('head tracking is not running — restart the camera');
+  if (!screenTracker.calibrated) return refuse('calibrate your screens first');
+  const screen = state.facing?.screen ?? null;
+  if (screen === null) {
+    return refuse(state.head ? 'not facing any calibrated screen' : 'no face in view');
+  }
+
+  carry.start(name, screen, performance.now());
+  const data = await send(name, { screen });
+  // Nothing was picked up — the screen was empty, or the request failed — so
+  // there is nothing to carry. Dry-run keeps it, so the whole move can be
+  // rehearsed without touching a window.
+  if (data?.reason !== 'dryRun' && (!data?.fired || data.changed === false)) carry.cancel();
+}
+
+/** You let go while facing another screen: the window goes there. */
+function dropOnScreen({ gesture, to }) {
+  if (!state.armed) return;
+  send(gesture, { screen: to, drop: true });
+}
+
 /** Detected gestures are silently dropped while disarmed — no log spam. */
 function onGestureDetected(name) {
   state.recent = name;
   state.recentAt = performance.now();
   if (runClientAction(name)) return;
   if (!state.armed) return;
+  if (isScreenGesture(name)) {
+    aimAtScreen(name);
+    return;
+  }
   send(name);
 }
 
@@ -316,6 +419,12 @@ function simulate(name) {
   if (runClientAction(name)) return;
   if (!state.armed) {
     logEntry('arm first, then test', 'note');
+    return;
+  }
+  // Uses where you are looking, like the real gesture. To aim at a screen
+  // without the camera, click it on the map under Screens instead.
+  if (isScreenGesture(name)) {
+    aimAtScreen(name);
     return;
   }
   send(name);
@@ -487,6 +596,286 @@ function recordFrame(pts, now) {
   );
 }
 
+// ---------------------------------------------------------------- screens
+
+function loadCalibration() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(SCREENS_STORAGE_KEY) ?? '[]');
+    return Array.isArray(parsed)
+      ? parsed.filter((s) => Number.isInteger(s?.id) && Number.isFinite(s?.yaw) && Number.isFinite(s?.pitch))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
+function saveCalibration() {
+  try {
+    localStorage.setItem(SCREENS_STORAGE_KEY, JSON.stringify(state.calibration));
+  } catch (err) {
+    logEntry(`could not save the screen calibration: ${err.message}`, 'failed');
+  }
+}
+
+/**
+ * Hand the tracker only screens that are connected right now. A calibration
+ * for a monitor that has since been unplugged is kept — plug it back in and it
+ * works again — but must not be faceable while it is gone.
+ */
+function applyCalibration() {
+  const connected = new Set(state.displays.map((d) => d.id));
+  screenTracker.setCalibration(state.calibration.filter((s) => connected.has(s.id)));
+}
+
+const displayName = (id) =>
+  state.displays.find((d) => d.id === id)?.name ?? state.calibration.find((s) => s.id === id)?.name ?? `display ${id}`;
+
+/**
+ * Where a display sits relative to the main one, in words, so "look at the
+ * BenQ" is unambiguous when two monitors share a name.
+ */
+function whereIs(display) {
+  if (display.main) return 'main';
+  const main = state.displays.find((d) => d.main) ?? state.displays[0];
+  const dx = display.x + display.width / 2 - (main.x + main.width / 2);
+  const dy = display.y + display.height / 2 - (main.y + main.height / 2);
+  if (Math.abs(dx) >= Math.abs(dy)) return dx > 0 ? 'right' : 'left';
+  return dy > 0 ? 'below' : 'above';
+}
+
+async function loadScreens() {
+  try {
+    const res = await fetch('./screens');
+    const data = await res.json();
+    const ids = (list) => list.map((d) => `${d.id}:${d.x},${d.y},${d.width}x${d.height}`).join(' ');
+    const changed = ids(data.displays ?? []) !== ids(state.displays);
+    state.displays = data.displays ?? [];
+    state.screensError = data.ok ? null : data.error;
+    if (changed) {
+      applyCalibration();
+      renderDeskMap();
+    }
+  } catch {
+    state.screensError = 'the server is not answering';
+  }
+  updateScreensStatus();
+}
+
+/**
+ * Your screens as macOS arranges them, scaled into the panel. Built once per
+ * change in the display list; updateDeskMap() then only moves classes around,
+ * because it runs on every frame.
+ */
+function renderDeskMap() {
+  const displays = state.displays;
+  if (displays.length === 0) {
+    el.deskMap.replaceChildren();
+    el.deskMap.hidden = true;
+    return;
+  }
+  el.deskMap.hidden = false;
+
+  const minX = Math.min(...displays.map((d) => d.x));
+  const minY = Math.min(...displays.map((d) => d.y));
+  const maxX = Math.max(...displays.map((d) => d.x + d.width));
+  const maxY = Math.max(...displays.map((d) => d.y + d.height));
+  const width = maxX - minX;
+  const height = maxY - minY;
+  // Fixed aspect box, so the map keeps the real proportions of the desk.
+  el.deskMap.style.aspectRatio = `${width} / ${height}`;
+
+  el.deskMap.replaceChildren(
+    ...displays.map((d) => {
+      const tile = document.createElement('button');
+      tile.type = 'button';
+      tile.className = 'screen';
+      tile.dataset.id = String(d.id);
+      tile.style.left = `${((d.x - minX) / width) * 100}%`;
+      tile.style.top = `${((d.y - minY) / height) * 100}%`;
+      tile.style.width = `${(d.width / width) * 100}%`;
+      tile.style.height = `${(d.height / height) * 100}%`;
+      tile.title = `Bring forward the front window on ${d.name} — the same as looking at it and pointing`;
+      tile.addEventListener('click', () => clickScreen(d.id));
+
+      const name = document.createElement('span');
+      name.className = 'name';
+      name.textContent = d.name;
+      const status = document.createElement('span');
+      status.className = 'status';
+      tile.append(name, status);
+      return tile;
+    }),
+  );
+  updateDeskMap();
+}
+
+/** Per frame: which screen you face, which one a carried window is headed for. */
+function updateDeskMap() {
+  const facing = state.facing?.screen ?? null;
+  const calibrated = new Set(state.calibration.map((s) => s.id));
+  const step = state.calibrating;
+  const calibratingId = step ? step.queue[step.index]?.id : null;
+
+  for (const tile of el.deskMap.children) {
+    const id = Number(tile.dataset.id);
+    tile.classList.toggle('facing', id === facing);
+    tile.classList.toggle('calibrated', calibrated.has(id));
+    tile.classList.toggle('calibrating', id === calibratingId);
+    tile.classList.toggle('source', carry.active && id === carry.from);
+    tile.classList.toggle('target', carry.active && id === carry.target && carry.target !== carry.from);
+
+    let status = calibrated.has(id) ? '' : 'not calibrated';
+    if (id === calibratingId) status = step.phase === 'recording' ? 'hold still…' : 'look here';
+    else if (carry.active && id === carry.target && carry.target !== carry.from) status = 'drop here';
+    else if (id === facing) status = 'facing';
+    tile.lastElementChild.textContent = status;
+  }
+}
+
+/**
+ * Aim at a screen by clicking its tile — the screen action without the camera,
+ * for trying the window side of it on its own.
+ */
+function clickScreen(id) {
+  const name = Object.keys(state.config?.gestures ?? {}).find(isScreenGesture);
+  if (!name) {
+    logEntry('no gesture is bound to focus_screen in config.json', 'note');
+    return;
+  }
+  if (!state.armed) {
+    logEntry('arm first, then click a screen', 'note');
+    return;
+  }
+  send(name, { screen: id });
+}
+
+function updateScreensStatus(text, kind = '') {
+  if (text === undefined) {
+    if (state.calibrating) return;
+    if (state.screensError) [text, kind] = [`Screens unavailable: ${state.screensError}.`, 'failed'];
+    else if (!wantsHead()) [text, kind] = ['Bind a gesture to "focus_screen" in config.json to use your screens.', ''];
+    else if (!screenTracker.calibrated) {
+      text = 'Not calibrated yet. Start the camera, then press Calibrate and look at each screen when asked.';
+    } else {
+      text = 'Look at a screen and point to bring its window forward. Keep pointing, turn to another screen and lower your hand to move the window there.';
+    }
+  }
+  el.screensStatus.textContent = text;
+  el.screensStatus.className = `hint ${kind}`.trim();
+}
+
+const CALIBRATE_COUNTDOWN_STEPS = 3;
+const CALIBRATE_STEP_MS = 800;
+const CALIBRATE_RECORD_MS = 1200;
+// Fewer head readings than this in the recording window means the face was
+// mostly out of view, and the median of a handful is not worth keeping.
+const CALIBRATE_MIN_SAMPLES = 6;
+// Median wander, in degrees, past which you were still turning while it
+// recorded and the reading would be a point somewhere along the way.
+const CALIBRATE_MAX_SPREAD = 5;
+
+/**
+ * Look at each screen in turn while the camera records where your head points.
+ *
+ * Paced by sound as much as by text, because the screen you are asked to look
+ * at is, by definition, not the one this page is on. Left to right, so the
+ * order is the order you would naturally turn in.
+ */
+async function startCalibration() {
+  await loadScreens();
+  if (!state.cameraOn) return updateScreensStatus('Start the camera first.', 'failed');
+  if (!state.headAvailable) {
+    return updateScreensStatus('Head tracking is not running. Restart the camera after binding focus_screen.', 'failed');
+  }
+  if (state.displays.length === 0) return updateScreensStatus('No screens were reported.', 'failed');
+
+  const queue = [...state.displays].sort((a, b) => a.x - b.x || a.y - b.y);
+  state.calibrating = { queue, index: 0, phase: 'countdown', samples: [], results: [], timer: null };
+  carry.cancel();
+  el.calibrateBtn.textContent = 'Cancel';
+  nextCalibrationStep();
+}
+
+function nextCalibrationStep() {
+  const cal = state.calibrating;
+  if (!cal) return;
+  const display = cal.queue[cal.index];
+  const label = `${display.name} (${whereIs(display)})`;
+
+  let remaining = CALIBRATE_COUNTDOWN_STEPS;
+  cal.phase = 'countdown';
+  const tick = () => {
+    if (state.calibrating !== cal) return;
+    if (remaining > 0) {
+      updateScreensStatus(`${cal.index + 1}/${cal.queue.length}: look at the middle of ${label}… ${remaining}`);
+      chime.play('tick');
+      remaining -= 1;
+      cal.timer = setTimeout(tick, CALIBRATE_STEP_MS);
+      return;
+    }
+    cal.phase = 'recording';
+    cal.samples = [];
+    updateScreensStatus(`${cal.index + 1}/${cal.queue.length}: hold still on ${label}…`);
+    cal.timer = setTimeout(finishCalibrationStep, CALIBRATE_RECORD_MS);
+  };
+  tick();
+}
+
+function finishCalibrationStep() {
+  const cal = state.calibrating;
+  if (!cal) return;
+  const display = cal.queue[cal.index];
+  const reading = summarizeHead(cal.samples);
+
+  if (!reading || cal.samples.length < CALIBRATE_MIN_SAMPLES) {
+    return endCalibration(`could not see your face while you looked at ${display.name}`);
+  }
+  if (reading.spread > CALIBRATE_MAX_SPREAD) {
+    return endCalibration(`your head was still moving while recording ${display.name} — hold still once you are facing it`);
+  }
+
+  cal.results.push({ id: display.id, name: display.name, yaw: reading.yaw, pitch: reading.pitch });
+  chime.play('done');
+  cal.index += 1;
+  if (cal.index < cal.queue.length) {
+    nextCalibrationStep();
+    return;
+  }
+
+  // Keep calibrations for screens that are not connected right now; replace
+  // the rest with what was just measured.
+  const measured = new Set(cal.results.map((r) => r.id));
+  state.calibration = [...state.calibration.filter((s) => !measured.has(s.id)), ...cal.results];
+  saveCalibration();
+  applyCalibration();
+
+  // Two screens closer together than twice the switching margin flip on noise.
+  const crowded = crowdedScreens(cal.results, screenTracker.options.switchMargin * 2);
+  endCalibration(null);
+  logEntry(`calibrated ${cal.results.length} screen${cal.results.length === 1 ? '' : 's'}`, 'note');
+  if (crowded.length > 0) {
+    const pairs = crowded.map(([a, b]) => `${a} and ${b}`).join(', ');
+    updateScreensStatus(
+      `Calibrated, but ${pairs} are too close together to tell apart reliably. Turn your whole head, not just your eyes, and calibrate again.`,
+      'failed',
+    );
+  } else {
+    updateScreensStatus();
+    updateScreensStatus(`Calibrated. ${el.screensStatus.textContent}`, 'on');
+  }
+}
+
+function endCalibration(problem) {
+  clearTimeout(state.calibrating?.timer);
+  state.calibrating = null;
+  el.calibrateBtn.textContent = 'Calibrate';
+  if (problem) {
+    chime.play('failed');
+    updateScreensStatus(`Calibration stopped: ${problem}. Nothing was changed.`, 'failed');
+  }
+  updateDeskMap();
+}
+
 // ---------------------------------------------------------------- detection
 
 /**
@@ -500,9 +889,18 @@ function recordFrame(pts, now) {
  * clocks exceeded the threshold. Transport delay is sub-millisecond, so one clock
  * for everything is both simpler and accurate enough.
  */
-function handleLandmarks(landmarks, width, height) {
+function handleLandmarks(landmarks, width, height, face) {
   const now = performance.now();
   const pts = landmarks && width && height ? toPoints(landmarks, width / height) : null;
+
+  // Head first, so a gesture fired on this frame aims at where you are looking
+  // now. `undefined` means the face model did not run on this frame — keep the
+  // last reading — while `null` means it ran and found no face.
+  if (face !== undefined && width && height) {
+    state.head = headPose(face, width / height);
+    state.facing = screenTracker.update(state.head);
+    if (state.calibrating?.phase === 'recording' && state.head) state.calibrating.samples.push(state.head);
+  }
 
   // Per pose, not a flat "am I armed": a gesture bound to a client action has
   // to fire while disarmed, and must take the cooldown that keeps it from
@@ -514,6 +912,11 @@ function handleLandmarks(landmarks, width, height) {
 
   if (state.recording) recordFrame(pts, now);
   else if (view.gesture) onGestureDetected(view.gesture);
+
+  // The shape, not the gated pose: turning your head moves your hand too, and
+  // that must not count as letting go of the window you are carrying.
+  const drop = carry.update(view.shape ?? null, state.facing?.screen ?? null, now);
+  if (drop) dropOnScreen(drop);
 
   markFrame(now);
   draw(landmarks, drawMode(view), width, height);
@@ -685,6 +1088,54 @@ function updateReadout() {
   if (sound === 'on') set(el.sound, 'on', 'on');
   else if (sound === 'off') set(el.sound, 'off', 'off');
   else set(el.sound, 'click page to enable', 'moving');
+
+  updateHeadReadout();
+  updateDeskMap();
+}
+
+/**
+ * Head and Facing rows. Facing is shown as distance/threshold, like palm speed
+ * and taught matches, so a near-miss says how near it was.
+ */
+function updateHeadReadout() {
+  if (!wantsHead()) {
+    set(el.head, 'off (nothing bound)', 'off');
+    set(el.facing, '—', 'off');
+    return;
+  }
+  if (!state.cameraOn) {
+    set(el.head, '—', 'off');
+    set(el.facing, '—', 'off');
+    return;
+  }
+  if (!state.headAvailable) {
+    set(el.head, state.mode === 'page' ? 'needs Chrome' : 'starting…', 'moving');
+    set(el.facing, '—', 'off');
+    return;
+  }
+
+  const pose = state.facing?.pose;
+  if (!pose) {
+    set(el.head, 'no face', 'off');
+    set(el.facing, '—', 'off');
+    return;
+  }
+  set(el.head, `yaw ${Math.round(pose.yaw)}° pitch ${Math.round(pose.pitch)}°`, '');
+
+  if (carry.active) {
+    const to = carry.target !== carry.from ? displayName(carry.target) : 'turn to a screen';
+    set(el.facing, `${displayName(carry.from)} → ${to}`, 'moving');
+    return;
+  }
+  if (!screenTracker.calibrated) {
+    set(el.facing, 'not calibrated', 'off');
+    return;
+  }
+
+  const { screen, nearest, distance } = state.facing;
+  const max = screenTracker.options.maxAngle;
+  if (screen !== null) set(el.facing, `${displayName(screen)} ${Math.round(distance)}° / ${max}`, 'on');
+  else set(el.facing, `nothing (${displayName(nearest)} ${Math.round(distance)}° / ${max})`, '');
 }
 
 // ---------------------------------------------------------------- camera
@@ -733,6 +1184,7 @@ async function resolveAssets() {
     umd: `${base}/vision_bundle.js`,
     wasm: `${base}/wasm`,
     model: (await exists(LOCAL_MODEL_URL)) ? LOCAL_MODEL_URL : CDN_MODEL_URL,
+    faceModel: (await exists(LOCAL_FACE_MODEL_URL)) ? LOCAL_FACE_MODEL_URL : CDN_FACE_MODEL_URL,
   };
 }
 
@@ -897,7 +1349,11 @@ async function startWorkerDetection(stream, assets) {
     if (type === 'landmarks') {
       if (!state.cameraOn) return;
       const { landmarks, width, height } = event.data;
-      handleLandmarks(landmarks, width, height);
+      handleLandmarks(landmarks, width, height, 'face' in event.data ? event.data.face : undefined);
+    } else if (type === 'head') {
+      state.headAvailable = event.data.available;
+      if (!event.data.available) logEntry(`head tracking unavailable: ${event.data.message}`, 'failed');
+      updateScreensStatus();
     } else if (type === 'error') {
       if (event.data.fatal) {
         stopCamera();
@@ -923,6 +1379,8 @@ async function startWorkerDetection(stream, assets) {
       bundleUrl: assets.umd,
       wasmUrl: assets.wasm,
       modelUrl: assets.model,
+      // Decided at camera start: binding focus_screen later needs a restart.
+      faceModelUrl: wantsHead() ? assets.faceModel : null,
     },
     [processor.readable],
   );
@@ -1020,6 +1478,12 @@ function stopCamera() {
   state.recent = null;
   state.fps = 0;
   state.cameraMuted = false;
+  state.headAvailable = false;
+  state.head = null;
+  state.facing = null;
+  screenTracker.reset();
+  carry.cancel();
+  if (state.calibrating) endCalibration('the camera stopped');
   draw(null);
   updateReadout();
 
@@ -1086,6 +1550,8 @@ async function superviseDetection() {
  */
 function setArmed(armed, source = null) {
   state.armed = armed;
+  // A window being carried when you disarm stays where it is.
+  if (!armed) carry.cancel();
   el.armBtn.setAttribute('aria-pressed', String(armed));
   el.armLabel.textContent = armed ? 'Armed' : 'Disarmed';
 
@@ -1118,6 +1584,11 @@ el.teachBtn.addEventListener('click', () => {
 });
 el.teachName.addEventListener('keydown', (event) => {
   if (event.key === 'Enter' && !state.recording) startRecording();
+});
+
+el.calibrateBtn.addEventListener('click', () => {
+  if (state.calibrating) endCalibration('cancelled');
+  else startCalibration();
 });
 
 // Opt-in autostart, used by scripts/gesture-launch.sh so one keypress reaches a
@@ -1165,7 +1636,11 @@ document.addEventListener('visibilitychange', () => {
 renderCustomGestures();
 await pollConfig();
 await loadHealth();
+await loadScreens();
 setInterval(pollConfig, 3000);
+// Monitors get plugged in and unplugged; the map and the calibration in use
+// follow within a few seconds.
+setInterval(loadScreens, 5000);
 // Keeps the detection status honest even when no frames are arriving to drive it.
 setInterval(updateReadout, 1000);
 

@@ -27,16 +27,25 @@ export const DEFAULT_THRESHOLDS = {
   // An open palm needs the thumb clearly away from the index tip, which also
   // implies the thumb is out to the side rather than tucked.
   palmMinSpread: 0.6,
+
+  // A point is the index alone, reaching well out. 1.6 sits between a pinching
+  // index (around 1.45, bent toward the thumb) and a straight one (around 1.95),
+  // so the half-way shape of a hand closing into a pinch does not read as one.
+  pointMinIndexReach: 1.6,
+
+  // ...with the thumb clear of the index tip, for the same reason: on the way
+  // into a pinch the index is out and the thumb is arriving.
+  pointMinThumbGap: 0.6,
 };
 
-export const POSES = ['pinch', 'open_palm', 'fist'];
+export const POSES = ['pinch', 'open_palm', 'fist', 'point'];
 
 /**
  * Classify a static pose.
  *
  * @param {{x:number,y:number}[]} pts Aspect-corrected points from `toPoints`.
  * @param {object} [thresholds]
- * @returns {'pinch'|'open_palm'|'fist'|null}
+ * @returns {'pinch'|'open_palm'|'fist'|'point'|null}
  */
 export function classifyPose(pts, thresholds = {}) {
   if (!pts || pts.length < 21) return null;
@@ -60,6 +69,15 @@ export function classifyPose(pts, thresholds = {}) {
 
   if (fingers.count === 0) {
     return 'fist';
+  }
+
+  if (
+    fingers.count === 1 &&
+    fingers.index &&
+    reach > t.pointMinIndexReach &&
+    gap > t.pointMinThumbGap
+  ) {
+    return 'point';
   }
 
   return null;

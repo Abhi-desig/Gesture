@@ -8,6 +8,11 @@ server on localhost, which presses the matching shortcut. A fist pauses music, a
 pinch arms and disarms the page, an open palm locks the screen, and a 4-finger
 swipe moves between Spaces.
 
+It also knows which of your screens you're looking at. Look at a monitor and
+point, and its front window comes forward. Keep pointing, turn your head to
+another monitor and lower your hand, and the window moves there. See
+[Spatial desk](#spatial-desk-look-point-move).
+
 Every mapping lives in [`config.json`](config.json). Change what a gesture does by
 editing that file — the server picks it up on save, no restart and no code changes.
 
@@ -207,6 +212,7 @@ injected keystroke cannot switch Spaces. See *Why Spaces don't respond to a key 
 | `open_palm`  | all five out, **still for 1.2s**         | `cmd+ctrl+q`    | lock screen         |
 | `swipe_left` | four fingers out, hand travels **left**  | `space_right`   | next Space          |
 | `swipe_right`| four fingers out, hand travels **right** | `space_left`    | previous Space      |
+| `point`      | index finger alone, **held 0.35s**       | `focus_screen`  | focus the screen you're looking at |
 
 ### Not every shortcut is equal — this is the main gotcha
 
@@ -288,6 +294,59 @@ A few other things worth knowing:
   [Always-on detection](#always-on-detection) for why this isn't the obvious
   implementation.)
 
+### Spatial desk: look, point, move
+
+Every other gesture does the same thing wherever you are looking. This one
+doesn't. The camera also tracks which way your head is turned, so the hand says
+*what* and the head says *where*:
+
+- **Look at a screen and point**: the front window on that screen comes
+  forward, and the mouse pointer jumps onto it.
+- **Point, keep pointing, turn your head to another screen, lower your hand**:
+  that window moves to the screen you turned to, keeping its relative position.
+  Let go while still facing the first screen and nothing moves, so a plain
+  point never turns into a move by accident.
+- **Looking at neither**, at your notebook say: pointing does nothing, and the
+  log says why. It never guesses the nearest screen.
+
+**Set it up once.** It needs the native helper (`npm run build:native`). Start
+the camera, then press **Calibrate** under **Screens**. The page asks for each
+screen in turn, left to right, with a countdown and a tick sound. Look at the
+middle of that screen and hold still until the next one is called. That's
+about two seconds per screen. Calibrate again if you move your monitors or your
+chair.
+
+**What you see.** The **Screens** map shows your displays as macOS arranges
+them. The one you're facing lights up green, and while you carry a window the
+destination lights up blue. The **Head** row shows your head's yaw and pitch,
+and **Facing** shows the nearest screen's angle next to `screenMaxAngle`, the
+same distance/threshold style as palm speed. Clicking a screen on the map does
+the same as looking at it and pointing, which is a way to test the window side
+without the camera.
+
+**Why the head and not the eyes.** A laptop webcam can't tell where your pupils
+point to better than a few degrees. Monitors sit tens of degrees apart, and you
+turn your head, not just your eyes, to look at one that far away. Head
+direction is the coarse, reliable signal that fits the question.
+
+**Why point and not something else.** `fist` already plays music and `pinch`
+arms the page. A point is what people do when they mean "that one", and it is
+held a bit longer (350 ms) than the other poses. People point while talking, and
+a hand closing into a pinch passes through a point.
+
+Notes:
+
+- **Calibration stays in this browser**, like taught gestures. It's tied to
+  this desk and this chair. A monitor that's unplugged keeps its calibration
+  and can't be targeted until it's back.
+- **Full-screen windows can't be moved.** They own their own Space, and the
+  log says so.
+- **Head tracking is only loaded when something is bound to `focus_screen`**,
+  and only in Chrome (it runs in the same background worker as the hands).
+  Change the binding while the camera is on and you need to restart the camera.
+- **The server checks the screen.** The page sends the display id you were
+  facing, and the server refuses any id that isn't connected.
+
 ### Teach your own gestures
 
 Under **Your gestures** on the page, type a name (lowercase, like `peace`),
@@ -329,11 +388,13 @@ the **Sound** row says when that's still needed. Turn it off with
     "pinch": "toggle_armed",
     "open_palm": "cmd+ctrl+q",
     "swipe_left": "space_right",
-    "swipe_right": "space_left"
+    "swipe_right": "space_left",
+    "point": "focus_screen"
   },
   "holdMs": {
     "default": 180,
-    "open_palm": 1200
+    "open_palm": 1200,
+    "point": 350
   },
   "cooldownMs": 1200,
   "requireReleaseBetweenFires": true,
@@ -352,6 +413,8 @@ the **Sound** row says when that's still needed. Turn it off with
   "dockSwipeLingerMs": 300,
   "dockSwipeWithTap": true,
   "verifySpaceSwitch": true,
+  "screenMaxAngle": 20,
+  "screenMovesPointer": true,
   "dryRun": false,
   "port": 4321
 }
@@ -549,6 +612,8 @@ was sent and macOS ignored it*, which are the two halves this bug kept blurring.
 | `dryRun` | Recognize and log gestures, press nothing. |
 | `customMaxDistance` | How close a hand must be to a taught gesture's samples to match, in palm lengths. Default 0.18. |
 | `feedbackSound` | Sound cues when a gesture lands or fails. Default `true`. |
+| `screenMaxAngle` | How far your head may turn from a screen's calibrated direction and still count as facing it, in degrees. Default 20. Lower it if a glance at your notebook counts as facing the laptop. |
+| `screenMovesPointer` | Move the mouse pointer onto the window a screen action focuses or moves. Default `true`. |
 
 Speeds and distances are in **palm-widths** (multiples of wrist→middle-knuckle
 distance), so they hold at any distance from the camera. The page shows live palm
@@ -564,6 +629,7 @@ server/
   shortcut.js        "cmd+shift+m" -> { modifiers, key }
   permissions.js     Accessibility check
   macos.js           Spaces, symbolic hotkeys, responsible-app lookup
+  screens.js         list displays, focus one, move a window onto one
   backends/          cgevent, nutjs, osascript, resolution order
 public/
   app.js             camera, detection loop, overlay, POST
@@ -572,8 +638,9 @@ public/
   swipe.js           motion tracking (stateful)
   recognizer.js      pose runs, hold times, cooldowns — the decisions
   custom-gestures.js taught gestures: samples, nearest-neighbour matching
+  screens.js         head direction -> the screen you face, and carrying windows
   feedback.js        sound cues
-test/                node:test — 103 tests, no camera needed
+test/                node:test — 125 tests, no camera needed
 ```
 
 `npm test` covers the parts where the real logic lives: pose classification,

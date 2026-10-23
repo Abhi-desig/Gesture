@@ -86,11 +86,12 @@ public/                 the page — runs in Chrome
   recognizer.js         pose runs, hold times, cooldowns  ← the decisions
   custom-gestures.js    taught gestures: samples, nearest-neighbour match
   feedback.js           sound cues: which response gets which sound
-  gestures.js           landmarks -> pose name (pinch / open_palm / fist)
+  gestures.js           landmarks -> pose name (pinch / open_palm / fist / point)
   swipe.js              landmarks over time -> swipe_left / swipe_right
   landmarks.js          geometry helpers: distances, palm centre, extension
+  screens.js            face -> head direction -> the screen you face; carrying
   detector-worker.js    MediaPipe in a Worker, so hiding the page cannot stall it
-  vendor/, models/      vendored MediaPipe runtime and the 7.8 MB model
+  vendor/, models/      vendored MediaPipe runtime, hand and face models
 
 server/                 the local server
   index.js              routes, cooldown, Space verification, preflight
@@ -98,16 +99,17 @@ server/                 the local server
   shortcut.js           "cmd+shift+m" -> { modifiers, key }
   permissions.js        Accessibility status, and who owes the grant
   macos.js              read-only OS queries: Spaces, hotkeys, responsible app
+  screens.js            displays, focus a screen, move a window — via the helper
   backends/
     index.js            picks a backend that can express your bindings
     cgevent.js          the Swift helper — the one that works
     nutjs.js            prebuilt fallback; cannot switch Spaces
     osascript.js        last resort; no media keys
 
-native/keysend.swift    key chords, media keys, dock swipes, direct Space calls
+native/keysend.swift    key chords, media keys, dock swipes, Space calls, windows
 src-tauri/              the menu-bar host (Rust)
-scripts/                build the helper, vendor the model, probe key-sending
-test/                   103 tests, no camera required
+scripts/                build the helper, vendor the models, probe key-sending
+test/                   125 tests, no camera required
 ```
 
 ---
@@ -123,9 +125,10 @@ it probably belongs in the recogniser.
 
 ```
 landmarks.js   geometry primitives
-gestures.js    classifyPose(pts)      -> 'pinch' | 'open_palm' | 'fist' | null
+gestures.js    classifyPose(pts)      -> 'pinch' | 'open_palm' | 'fist' | 'point' | null
 swipe.js       SwipeTracker.update()  -> 'swipe_left' | 'swipe_right' | null
-recognizer.js  Recognizer.update()    -> a view: gesture, pose, held, velocity…
+recognizer.js  Recognizer.update()    -> a view: gesture, pose, shape, held, velocity…
+screens.js     ScreenTracker.update() -> the display you face; Carry.update() -> a drop
 app.js         wires the above to the camera, canvas and server
 ```
 
@@ -149,7 +152,7 @@ Main thread → worker:
 
 | Message | Payload |
 | --- | --- |
-| `start` | `readable` (transferred), `bundleUrl`, `wasmUrl`, `modelUrl` |
+| `start` | `readable` (transferred), `bundleUrl`, `wasmUrl`, `modelUrl`, `faceModelUrl` (null unless a gesture is bound to a screen action) |
 | `stop` | — |
 
 Worker → main thread:
@@ -157,7 +160,8 @@ Worker → main thread:
 | Message | Meaning |
 | --- | --- |
 | `ready` | MediaPipe loaded and the landmarker exists |
-| `landmarks` | `landmarks`, `width`, `height` — one frame |
+| `head` | `available`, `message` — whether the face landmarker started. Never fatal |
+| `landmarks` | `landmarks`, `width`, `height` — one frame. `face` too on every other frame: absent means "not run this frame", `null` means "ran, no face" |
 | `error` | `message`, `fatal`. Fatal stops the camera; non-fatal is rate-limited into the log |
 | `stopped` | the loop exited |
 
@@ -231,17 +235,55 @@ a tick for dry-run, silence for cooldown. The page plays it on the response, so
 the closed loop the server runs for Space switches is audible too. Web Audio
 needs a real click or key press before it can start; hand gestures don't count.
 
+### Head tracking and screens
+
+Every other binding means the same thing wherever you look. `focus_screen`
+doesn't: the hand says *what*, the head says *where*.
+
+1. **Head direction.** The worker runs MediaPipe's face landmarker on every
+   other frame. `headPose()` reads yaw from the line between the outer eye
+   corners in the x–z plane and pitch from the forehead–chin line. Those are
+   depth angles from the face mesh, so where you sit in the frame and how far
+   away you are don't change them. They're loose degrees, because MediaPipe's z
+   is only "roughly the scale of x". That doesn't matter, because nothing is
+   compared against an absolute angle.
+2. **Calibration** records the median head direction while you look at each
+   connected display, left to right, paced by sound because the screen you're
+   asked to look at is never the one the page is on. A reading is refused if
+   too few frames saw a face or the head was still moving (median spread over
+   5°). Readings are stored in localStorage by display id.
+3. **`ScreenTracker`** smooths the angles (EMA 0.35) and picks the nearest
+   calibrated screen, with two guards. Past `screenMaxAngle` it reports *no*
+   screen, so looking at your notebook is not looking at the laptop. And a
+   challenger has to beat the current screen by `switchMargin` (4°), so a head
+   held at the midpoint doesn't flip on noise.
+4. **Firing.** `point` fires through the recogniser like any pose. `app.js` sends
+   `{"gesture": "point", "screen": <id>}` and starts a **`Carry`**.
+5. **Carrying.** While the hand keeps the shape, the screen you face becomes the
+   target. When the shape is gone for 200 ms (including the hand leaving the
+   frame, which is what lowering your arm looks like), a different target sends
+   `{"screen": <target>, "drop": true}`. The same screen sends nothing. A carry
+   expires after 8 s, and disarming cancels it. If the focus found no window, the
+   carry is cancelled, because there's nothing to carry.
+
+The carry follows `view.shape`, not `view.pose`. `pose` is gated by stillness so
+swipes can't fire poses, but turning your head moves your hand. Following the
+gated pose made every carry "let go" half-way through the turn. `shape` is the
+classification regardless of motion, built-in poses only, since a taught match
+is too loose to trust on a moving hand.
+
 ---
 
 ## 5. Bindings, and the two kinds
 
-`config.json` maps a gesture name to one of three things:
+`config.json` maps a gesture name to one of four things:
 
 ```json
 {
   "fist":        "audio_play",    // a key the server presses
   "swipe_left":  "space_right",   // a server-side action
-  "pinch":       "toggle_armed"   // a client-side action
+  "pinch":       "toggle_armed",  // a client-side action
+  "point":       "focus_screen"   // a screen action
 }
 ```
 
@@ -258,11 +300,17 @@ where that state lives — and it has to work while disarmed, which is exactly w
 the page sends the server nothing at all. The list travels to the page in
 `GET /config` as `clientActions`, so it cannot drift from the validator.
 
+**Screen actions** (`focus_screen`) need something only the page knows: which
+display you were facing. The page sends it with the gesture, and the server
+validates it and acts through the native helper, never a keyboard backend. The
+list travels as `screenActions`, and the page only loads the face model when
+one is bound.
+
 Two consequences worth knowing, both of which were bugs first:
 
-- `unsupportedBindings()` must skip client bindings. They have no parsed
-  shortcut, so testing them made every backend look incapable and dropped the
-  whole app to dry-run.
+- `unsupportedBindings()` must skip client and screen bindings. They have no
+  parsed shortcut, so testing them made every backend look incapable and dropped
+  the whole app to dry-run.
 - `POST /gesture` with a client action answers **400** explaining the page owns
   it, rather than failing deeper down on an unparseable shortcut.
 
@@ -281,8 +329,9 @@ disarm everything after it — with nothing logged anywhere.
 
 | Route | Purpose |
 | --- | --- |
-| `POST /gesture` | The only route that presses keys |
-| `GET /config` | Bindings, tunables, `clientActions`, `knownGestures` |
+| `POST /gesture` | The only route that presses keys or moves windows |
+| `GET /config` | Bindings, tunables, `clientActions`, `screenActions`, `knownGestures` |
+| `GET /screens` | Connected displays in global points, read fresh each time |
 | `GET /health` | Backend, permission status, strategies |
 | `POST /heartbeat` | Page liveness: fps, mode, visibility, `msSinceFrame` |
 | `POST /client` | Engine capabilities, once at load |
@@ -304,6 +353,14 @@ every mutating route:
 
 Verified: cross-origin → 403, wrong content type → 415, body over 4 kB → 413,
 unbound gesture → 404, malformed body → 400.
+
+Screen actions are the one place the body carries more than a name: a display
+id. That widens what a compromised page could ask for by exactly one thing,
+*which of your own screens*. The id must be an integer that is connected right
+now, or the answer is 400 (missing) or 404 (not connected), so the worst it can
+do is bring forward a window you already have open. A drop has its own cooldown
+slot (`point:drop`), because it often follows the focus that started it by less
+than a cooldown.
 
 ### Cooldown
 
@@ -399,11 +456,30 @@ keysend key   <keycode> [cmd] [ctrl] [alt] [shift] [--source=…]
 keysend media <nx-type>                    # NSSystemDefined, not virtual keycodes
 keysend swipe <left|right> [--variant=…]   # the Dock's trackpad gesture
 keysend space <left|right|status>          # direct WindowServer call
+keysend displays                           # JSON: id, name, frame, main, builtin
+keysend focus <display-id> [--no-pointer]  # bring that screen's front window forward
+keysend move  <display-id> [--no-pointer]  # move the focused window onto that screen
 ```
 
 Shelled out to per press rather than bound in-process: a spawn is ~3 ms against a
 1200 ms cooldown, and a separate process cannot leave a modifier stuck down in the
 server if it crashes mid-chord.
+
+The window commands are all public API. `CGWindowListCopyWindowInfo` finds the
+frontmost layer-0 window whose centre is on the display. It needs no Screen
+Recording permission, because only titles are gated and those come from
+Accessibility instead. The Accessibility API focuses and moves it. Matching
+between the two is by frame, since they share CG global coordinates and no
+public id links them. Focus sets `AXFrontmost` rather than relying on
+`NSRunningApplication.activate`: since macOS 14 activation is cooperative, and
+a background helper asking another app forward is exactly what it may ignore. A
+move keeps the window's relative position in the destination's visible frame,
+shrinking it only if it won't fit, and sets size, position, size, as window
+managers do. Exit 4 means Accessibility isn't granted, and the server turns it
+into the same 503 as a refused key press.
+
+Run inside a sandbox, `displays` prints `[]`: the process can't reach the
+WindowServer. The server reports that as an error rather than "no screens".
 
 ---
 
@@ -529,6 +605,16 @@ And when you **swipe left**: step 8 becomes `spaceStrategy: "osascript"` →
 down'`, and the server then samples `CGSGetActiveSpace` for 2 s to report whether
 the desktop actually moved, stayed moved, or snapped back.
 
+And when you **look at the BenQ and point**: every other frame, the face
+landmarks have already moved `ScreenTracker` onto the BenQ's display id. Step 5
+returns `point` after its 350 ms hold. Step 6 finds `focus_screen` in
+`screenActions`, starts a `Carry` from the BenQ and posts `{"gesture": "point",
+"screen": 2}`. The server checks display 2 is connected and runs `keysend focus 2`,
+which raises the BenQ's front window and puts the pointer on it. Keep pointing,
+turn to the laptop and lower your hand: 200 ms after the shape is gone, the carry
+sees a different target and posts `{"screen": 1, "drop": true}`, and `keysend
+move 1` puts that window on the laptop in the same relative spot.
+
 ---
 
 ## 13. Where the bodies are buried
@@ -548,5 +634,11 @@ Things that will bite you, all of which bit someone already:
 - **Rebuilding the app invalidates its permissions.** §10.
 - **Taught gestures never run in the four-finger pose.** Remove that guard and a
   taught shape near it fires while you're getting ready to swipe.
+- **A carry follows `view.shape`, never `view.pose`.** The pose is stillness-gated,
+  and turning your head moves your hand, so a carry on `pose` lets go half-way
+  through every turn.
+- **No screen is not the nearest screen.** Past `screenMaxAngle` the tracker says
+  `null` on purpose. "Helpfully" falling back to the closest one makes a glance at
+  your notebook focus the laptop.
 - **`app.exit()` fires `CloseRequested`.** A close handler that always prevents
   will cancel your quit.

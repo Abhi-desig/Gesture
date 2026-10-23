@@ -120,6 +120,39 @@ test('a backend is not disqualified by a client action it cannot press', () => {
   });
 });
 
+test('a screen action is a binding, not a shortcut, and reaches the page', () => {
+  // Like toggle_armed it is never pressed, so it must not go through the key
+  // parser; the page needs the list to know which gestures carry a screen.
+  const { gestures, settings } = validate({ ...base, gestures: { point: 'focus_screen' } });
+  assert.equal(gestures.point.combo, 'focus_screen');
+  assert.equal(gestures.point.screen, true);
+  assert.equal(gestures.point.parsed, undefined);
+  assert.equal(settings.screenMaxAngle, 20);
+  assert.equal(settings.screenMovesPointer, true);
+
+  const store = new ConfigStore(new URL('../config.json', import.meta.url).pathname);
+  store.load();
+  const payload = store.clientPayload();
+  assert.ok(payload.screenActions.includes('focus_screen'));
+  assert.equal(payload.tuning.screenMaxAngle, 20);
+});
+
+test('a backend is not disqualified by a screen action it cannot press', () => {
+  // The same regression as the client action above, for the same reason: no
+  // `parsed`, so without the skip every backend looks incapable.
+  const bindings = validate({
+    ...base,
+    gestures: { point: 'focus_screen', fist: 'audio_play' },
+  }).gestures;
+  const messages = [];
+  return resolveBackend('auto', bindings, { log: (m) => messages.push(m) }).then(() => {
+    assert.ok(
+      !messages.some((m) => m.includes('cannot send point')),
+      `screen action should not count against a backend: ${messages.join(' | ')}`,
+    );
+  });
+});
+
 test('a taught gesture can be bound without a warning; a malformed name explains the format', () => {
   const ok = validate({ gestures: { 'custom:peace': 'audio_next' } });
   assert.equal(ok.gestures['custom:peace'].combo, 'audio_next');

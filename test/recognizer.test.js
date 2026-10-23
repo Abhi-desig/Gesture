@@ -365,3 +365,24 @@ test('holdMs can set every taught gesture, or one by name', () => {
   assert.equal(one.holdFor('custom:other'), 400, 'falls back to the custom default');
   assert.equal(one.holdFor('fist'), 180, 'built-ins are unaffected');
 });
+
+test('a point fires after its own longer hold', () => {
+  // People point while talking, and a hand closing into a pinch passes
+  // through a point, so it waits longer than the other poses.
+  assert.deepEqual(run(new Recognizer(), hold({ pose: 'point', ms: 250 })), []);
+  assert.deepEqual(run(new Recognizer(), hold({ pose: 'point', ms: 450 })), ['point']);
+});
+
+test('a moving hand still reports its shape, though it fires nothing', () => {
+  // A window carried to another screen follows the shape, not the gated pose:
+  // turning your head moves your hand, and that must not read as letting go.
+  const r = new Recognizer();
+  const views = motionStream({ pose: 'point', dx: RIGHTWARD }).map(({ pts, t }) => r.update(pts, t));
+  const moving = views.filter((v) => v.velocity > r.tuning.stillnessMaxVelocity);
+  assert.ok(moving.length > 0, 'the stream should move fast enough to gate poses');
+  for (const v of moving) {
+    assert.equal(v.pose, null);
+    assert.equal(v.shape, 'point');
+  }
+  assert.deepEqual(views.filter((v) => v.gesture), []);
+});

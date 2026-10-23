@@ -42,8 +42,12 @@ import { SwipeTracker } from './swipe.js';
  * `custom` covers every taught gesture. Longer than a built-in pose because a
  * nearest-neighbour match is a looser judgement than a geometric rule, so it is
  * made to prove itself for longer before it presses anything.
+ *
+ * `point` is longer for a similar reason: people point while talking, and a
+ * hand closing into a pinch passes through it. A third of a second is long
+ * enough to mean it and short enough not to feel like waiting.
  */
-export const DEFAULT_HOLD_MS = { default: 180, open_palm: 1200, custom: 400 };
+export const DEFAULT_HOLD_MS = { default: 180, open_palm: 1200, point: 350, custom: 400 };
 
 // A floor so that on a very slow camera a single frame can't satisfy a hold.
 const MIN_FRAMES = 2;
@@ -148,10 +152,19 @@ export class Recognizer {
 
     // Stillness gate: a moving hand is a swipe candidate, not a held pose.
     const still = motion.velocity <= this.tuning.stillnessMaxVelocity;
-    const pose = still && !this.poseSuppressed ? this.#classify(pts, motion) : null;
+    const gated = still && !this.poseSuppressed;
+    const pose = gated ? this.#classify(pts, motion) : null;
+
+    // The hand's shape whatever it is doing. Firing still waits for stillness,
+    // but anything following a pose that has already fired — a window being
+    // carried to another screen — must not see it "let go" just because the
+    // hand drifted while you turned your head. Built-in poses only while
+    // moving: a taught gesture is a nearest-neighbour judgement, too loose to
+    // trust on a moving hand, so it is never asked there.
+    const shape = gated ? pose : classifyPose(pts);
 
     const gesture = this.#advanceRun(pose, now, canFire);
-    return this.#view({ handPresent: true, motion, gesture, now });
+    return this.#view({ handPresent: true, motion, gesture, shape, now });
   }
 
   /**
@@ -199,11 +212,12 @@ export class Recognizer {
     return pose;
   }
 
-  #view({ handPresent, motion, gesture = null, now = 0 }) {
+  #view({ handPresent, motion, gesture = null, shape = null, now = 0 }) {
     return {
       gesture,
       handPresent,
       pose: this.run.pose,
+      shape,
       frames: this.run.frames,
       heldMs: this.run.pose ? Math.max(0, now - this.run.startedAt) : 0,
       holdMs: this.run.pose ? this.holdFor(this.run.pose) : 0,

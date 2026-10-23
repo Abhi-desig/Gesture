@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { CLIENT_ACTIONS } from '../server/config.js';
+import { CLIENT_ACTIONS, SCREEN_ACTIONS } from '../server/config.js';
 import { formatShortcut, knownKeys, parseShortcut } from '../server/shortcut.js';
 
 test('parses a plain key', () => {
@@ -59,9 +59,9 @@ test('parses the shipped default bindings', () => {
 
   assert.ok(bindings.length > 0, 'config.json should ship some bindings');
   for (const [gesture, combo] of bindings) {
-    // Client actions are performed by the page and are deliberately not
-    // shortcuts, so they must not be run through the key parser.
-    if (CLIENT_ACTIONS.includes(combo)) continue;
+    // Client and screen actions are deliberately not shortcuts, so they must
+    // not be run through the key parser.
+    if (CLIENT_ACTIONS.includes(combo) || SCREEN_ACTIONS.includes(combo)) continue;
     assert.doesNotThrow(() => parseShortcut(combo), `${gesture}: ${combo}`);
   }
 

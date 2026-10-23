@@ -21,25 +21,27 @@
 // worker. importScripts of the UMD build works, and exposes a `Vision` global.
 
 let landmarker = null;
+let faceLandmarker = null;
 let running = false;
+
+// Head tracking runs on every other frame. A head turns far more slowly than a
+// hand moves, so half the rate costs nothing you could notice — and the face
+// model is the heavier of the two.
+const FACE_EVERY = 2;
 
 function post(type, payload = {}) {
   self.postMessage({ type, ...payload });
 }
 
-async function createLandmarker({ wasmUrl, modelUrl }) {
-  // `Vision` is the global the UMD bundle installs; the ESM build's named exports
-  // aren't available here because this is a classic worker.
-  const { FilesetResolver, HandLandmarker } = self.Vision;
-  const vision = await FilesetResolver.forVisionTasks(wasmUrl);
-
+/** Create a MediaPipe task, preferring the GPU and falling back to the CPU. */
+async function createTask(Task, vision, modelUrl, options) {
   let lastError;
   for (const delegate of ['GPU', 'CPU']) {
     try {
-      return await HandLandmarker.createFromOptions(vision, {
+      return await Task.createFromOptions(vision, {
         baseOptions: { modelAssetPath: modelUrl, delegate },
         runningMode: 'VIDEO',
-        numHands: 1,
+        ...options,
       });
     } catch (err) {
       lastError = err;
@@ -48,9 +50,30 @@ async function createLandmarker({ wasmUrl, modelUrl }) {
   throw lastError;
 }
 
+async function createLandmarkers({ wasmUrl, modelUrl, faceModelUrl }) {
+  // `Vision` is the global the UMD bundle installs; the ESM build's named exports
+  // aren't available here because this is a classic worker.
+  const { FilesetResolver, HandLandmarker, FaceLandmarker } = self.Vision;
+  const vision = await FilesetResolver.forVisionTasks(wasmUrl);
+
+  landmarker = await createTask(HandLandmarker, vision, modelUrl, { numHands: 1 });
+
+  // Only when a gesture is bound to a screen action: nobody else should pay for
+  // a second model. And never fatal — hands without a head is still the whole
+  // of the original app.
+  if (!faceModelUrl) return;
+  try {
+    faceLandmarker = await createTask(FaceLandmarker, vision, faceModelUrl, { numFaces: 1 });
+    post('head', { available: true });
+  } catch (err) {
+    post('head', { available: false, message: err.message });
+  }
+}
+
 async function loop(readable) {
   const reader = readable.getReader();
   let lastTs = 0;
+  let frameIndex = 0;
 
   while (running) {
     const { value: frame, done } = await reader.read();
@@ -72,11 +95,20 @@ async function loop(readable) {
       lastTs = ts;
 
       const result = landmarker.detectForVideo(frame, ts);
-      post('landmarks', {
+      const payload = {
         landmarks: result.landmarks?.[0] ?? null,
         width: frame.displayWidth,
         height: frame.displayHeight,
-      });
+      };
+
+      // `face` is present only on frames where the face model ran: absent means
+      // "no new reading", null means "looked, and there is no face".
+      frameIndex += 1;
+      if (faceLandmarker && frameIndex % FACE_EVERY === 0) {
+        payload.face = faceLandmarker.detectForVideo(frame, ts).faceLandmarks?.[0] ?? null;
+      }
+
+      post('landmarks', payload);
     } catch (err) {
       post('error', { message: err.message, fatal: false });
     } finally {
@@ -99,7 +131,7 @@ self.onmessage = async (event) => {
 
   if (type !== 'start') return;
 
-  const { readable, wasmUrl, modelUrl, bundleUrl } = event.data;
+  const { readable, wasmUrl, modelUrl, faceModelUrl, bundleUrl } = event.data;
 
   try {
     importScripts(bundleUrl);
@@ -109,7 +141,7 @@ self.onmessage = async (event) => {
   }
 
   try {
-    landmarker = await createLandmarker({ wasmUrl, modelUrl });
+    await createLandmarkers({ wasmUrl, modelUrl, faceModelUrl });
   } catch (err) {
     post('error', { message: `could not create hand landmarker: ${err.message}`, fatal: true });
     return;
