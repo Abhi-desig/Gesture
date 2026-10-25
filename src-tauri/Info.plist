@@ -18,9 +18,9 @@
   <key>NSAppleEventsUsageDescription</key>
   <string>Gesture asks System Events to switch between desktops when you swipe.</string>
 
-  <!-- A menu-bar app, not a Dock app: LSUIElement keeps it out of the Dock and
-       the app switcher so it can sit in the background. The window is still
-       shown and focused normally when opened from the tray. -->
+  <!-- Not a Dock app: LSUIElement keeps it out of the Dock and the app
+       switcher. Its one window is the orb under the camera, a panel that never
+       takes focus; Settings is the hidden Chrome window it brings forward. -->
   <key>LSUIElement</key>
   <true/>
 </dict>

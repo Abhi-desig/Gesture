@@ -1,6 +1,6 @@
-// Screen actions: list the displays, focus one, move a window onto one.
+// Screen actions: list the displays, and focus one.
 //
-// All three go through the native helper (native/keysend.swift), for the same
+// Both go through the native helper (native/keysend.swift), for the same
 // reason key presses do — nothing in npm reaches the Accessibility API — and,
 // like key presses, they shell out per call: ~10ms against a gesture held for a
 // third of a second.
@@ -68,12 +68,3 @@ export function focusScreen(id, { movePointer = true } = {}) {
   return helper(['focus', String(id), ...pointerArgs(movePointer)]);
 }
 
-/**
- * Move the focused window onto a display, keeping its relative position.
- *
- * @returns {Promise<{moved:boolean, app:string, window:string, from:number,
- *   to:number, reason?:string}>}
- */
-export function moveWindowTo(id, { movePointer = true } = {}) {
-  return helper(['move', String(id), ...pointerArgs(movePointer)]);
-}

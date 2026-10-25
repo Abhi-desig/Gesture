@@ -1,9 +1,8 @@
 // Which of your screens you are facing, worked out from where your head points.
 //
 // This is the spatial half of the app. The hand says *what* to do; the head
-// says *where*. Look at a screen and point, and that screen's front window comes
-// forward. Keep pointing, turn to another screen and lower your hand, and the
-// window moves there.
+// says *where*. Look at a screen and pinch, and that screen's front window comes
+// forward.
 //
 // Pure and camera-free, like gestures.js: face landmarks in, a display id out.
 // app.js feeds it from the camera, the tests feed it synthetic faces.
@@ -13,12 +12,17 @@
 // apart, and you turn your head — not just your eyes — to look at one that far
 // away. Head direction is the coarse, honest signal that matches the question.
 
+import { median } from './stats.js';
+
 // MediaPipe face mesh indices. Subject's right is image left.
 export const FACE = {
   RIGHT_EYE_OUTER: 33,
   LEFT_EYE_OUTER: 263,
   FOREHEAD: 10,
   CHIN: 152,
+  // Inner lip centres, top and bottom: their midpoint is the mouth for "shh".
+  UPPER_LIP: 13,
+  LOWER_LIP: 14,
 };
 
 const FACE_POINTS = 468;
@@ -56,15 +60,20 @@ export function headPose(face, aspect = 1) {
   return { yaw, pitch };
 }
 
+/**
+ * The middle of the mouth, in the hand's aspect-corrected units, so a hand
+ * gesture can be measured against it ("shh").
+ */
+export function mouthPoint(face, aspect = 1) {
+  if (!face || face.length < FACE_POINTS) return null;
+  const a = face[FACE.UPPER_LIP];
+  const b = face[FACE.LOWER_LIP];
+  return { x: ((a.x + b.x) / 2) * aspect, y: (a.y + b.y) / 2 };
+}
+
 /** Angular distance between two head directions, in the same loose degrees. */
 export function angleBetween(a, b) {
   return Math.hypot(a.yaw - b.yaw, a.pitch - b.pitch);
-}
-
-function median(values) {
-  const sorted = [...values].sort((a, b) => a - b);
-  const mid = Math.floor(sorted.length / 2);
-  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
 /**
@@ -106,10 +115,68 @@ export function crowdedScreens(screens, minAngle) {
   return out;
 }
 
+/** One-pole low-pass: the building block of both filters below. */
+class LowPass {
+  constructor() {
+    this.y = null;
+  }
+
+  filter(x, alpha) {
+    this.y = this.y === null ? x : alpha * x + (1 - alpha) * this.y;
+    return this.y;
+  }
+}
+
+const alphaFor = (cutoffHz, dtSec) => 1 / (1 + 1 / (2 * Math.PI * cutoffHz * dtSec));
+
+/**
+ * The 1€ filter (Casiez, Roussel & Vogel, CHI 2012): a low-pass whose cutoff
+ * rises with speed. Held still, it smooths hard and the reading stops
+ * jittering; turning, it lets go and follows almost at once.
+ *
+ * That is exactly the trade a fixed EMA cannot make. At the 20 Hz face rate an
+ * EMA of 0.35 takes ~270 ms to cover 90% of a head turn, longer than a pinch
+ * takes to fire, so a quick turn-and-pinch can aim at the screen you came from.
+ *
+ * `minCutoff` (Hz) sets how much a still head is smoothed; `beta` how fast the
+ * cutoff opens with speed, here in degrees per second. With beta 0 it is just
+ * a slower EMA — the setting has to be measured, which is what
+ * scripts/replay-facing.mjs does with real head traces.
+ */
+export class OneEuroFilter {
+  constructor({ minCutoff = 1, beta = 0.1, dCutoff = 1 } = {}) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.reset();
+  }
+
+  reset() {
+    this.x = new LowPass();
+    this.dx = new LowPass();
+    this.lastT = null;
+  }
+
+  /** @param {number} value @param {number} tMs Monotonic milliseconds. */
+  filter(value, tMs) {
+    if (this.lastT === null) {
+      this.lastT = tMs;
+      this.dx.filter(0, 1);
+      return this.x.filter(value, 1);
+    }
+    // A floor, not a skip: two readings landing in the same millisecond (a
+    // stalled worker catching up) must still be filtered, not divide by zero.
+    const dt = Math.max((tMs - this.lastT) / 1000, 0.001);
+    this.lastT = tMs;
+    const speed = this.dx.filter((value - this.x.y) / dt, alphaFor(this.dCutoff, dt));
+    return this.x.filter(value, alphaFor(this.minCutoff + this.beta * Math.abs(speed), dt));
+  }
+}
+
 export const DEFAULT_SCREEN_OPTIONS = {
   // How far your head may point from a screen's calibrated direction and still
   // count as facing it. Past this you are looking at something else — your
-  // notebook, the window, the person next to you — and pointing does nothing.
+  // notebook, the window, the person next to you — and a pinch does nothing.
   maxAngle: 20,
 
   // A screen has to beat the current one by this much before attention moves.
@@ -117,9 +184,17 @@ export const DEFAULT_SCREEN_OPTIONS = {
   // every frame of tracking noise.
   switchMargin: 4,
 
-  // Exponential smoothing on the raw angles, per frame. Head tracking jitters by
-  // a degree or two; this keeps the readout readable and the margin meaningful.
+  // Which smoothing runs on the raw angles: 'ema', 'oneEuro' or 'none'. EMA is
+  // still the live default — it changes only once the check-up's recorded
+  // head traces show which setting actually picks screens better.
+  filter: 'ema',
+
+  // EMA weight per face reading.
   smoothing: 0.35,
+
+  // 1€ settings, used when filter is 'oneEuro'.
+  minCutoff: 1,
+  beta: 0.1,
 };
 
 /**
@@ -134,6 +209,13 @@ export class ScreenTracker {
 
   setOptions(options = {}) {
     this.options = { ...this.options, ...options };
+    this.#makeFilters();
+  }
+
+  #makeFilters() {
+    const { minCutoff, beta } = this.options;
+    this.yawFilter = new OneEuroFilter({ minCutoff, beta });
+    this.pitchFilter = new OneEuroFilter({ minCutoff, beta });
   }
 
   /** @param {{id:number,name:string,yaw:number,pitch:number}[]} screens */
@@ -149,18 +231,37 @@ export class ScreenTracker {
   reset() {
     this.smoothed = null;
     this.current = null;
+    this.#makeFilters();
+  }
+
+  /** The raw angles through whichever filter is configured. */
+  #smooth(pose, t) {
+    const { filter, smoothing: a } = this.options;
+    if (filter === 'none') return { ...pose };
+    if (filter === 'oneEuro' && Number.isFinite(t)) {
+      return { yaw: this.yawFilter.filter(pose.yaw, t), pitch: this.pitchFilter.filter(pose.pitch, t) };
+    }
+    // EMA — also the fallback when no timestamp came with the reading.
+    return this.smoothed
+      ? {
+          yaw: this.smoothed.yaw + a * (pose.yaw - this.smoothed.yaw),
+          pitch: this.smoothed.pitch + a * (pose.pitch - this.smoothed.pitch),
+        }
+      : { ...pose };
   }
 
   /**
    * Feed one head pose.
    *
    * @param {{yaw:number,pitch:number}|null} pose null when no face is in view.
+   * @param {number} [t] Monotonic ms of the reading. The 1€ filter needs it;
+   *   the EMA does not.
    * @returns {{screen: number|null, pose: {yaw:number,pitch:number}|null,
    *   distance: number|null, nearest: number|null}} `screen` is who has your
    *   attention; `nearest` and `distance` are for the readout, and are reported
    *   even when you are too far from every screen to count as facing one.
    */
-  update(pose) {
+  update(pose, t) {
     if (!pose) {
       // Lost the face: say so rather than holding a stale answer. A turn
       // that happened while the face was out of view must not act on the
@@ -169,13 +270,7 @@ export class ScreenTracker {
       return { screen: null, pose: null, distance: null, nearest: null };
     }
 
-    const a = this.options.smoothing;
-    this.smoothed = this.smoothed
-      ? {
-          yaw: this.smoothed.yaw + a * (pose.yaw - this.smoothed.yaw),
-          pitch: this.smoothed.pitch + a * (pose.pitch - this.smoothed.pitch),
-        }
-      : { ...pose };
+    this.smoothed = this.#smooth(pose, t);
 
     if (!this.calibrated) return { screen: null, pose: this.smoothed, distance: null, nearest: null };
 
@@ -200,75 +295,60 @@ export class ScreenTracker {
 }
 
 /**
- * Carrying a window from one screen to another.
+ * Short spoken names for the displays: "laptop" for the built-in one, the first
+ * word of the name otherwise ("BenQ"). Prompts are heard while you look away
+ * from this page, so they have to be short and unmistakable; two monitors with
+ * the same first word become "left Dell" and "right Dell".
  *
- * Starts when a screen gesture fires — the window on the screen you were facing
- * has just come forward. While the gesture is held, the screen you turn to is
- * the destination. Let go and, if that is a different screen, the window goes
- * there; if it is the same one, nothing more happens, so a plain point-to-focus
- * never moves anything.
- *
- * "Let go" includes the hand leaving the frame, which is what lowering your arm
- * looks like to the camera. A short grace stops one dropped tracking frame from
- * counting as a release.
+ * @param {{id:number,name:string,x:number,builtin?:boolean}[]} displays
+ * @returns {Record<number, string>}
  */
-export class Carry {
-  constructor({ releaseMs = 200, timeoutMs = 8000 } = {}) {
-    this.releaseMs = releaseMs;
-    this.timeoutMs = timeoutMs;
-    this.cancel();
+export function spokenLabels(displays) {
+  const base = (d) => (d.builtin ? 'laptop' : (d.name.split(/\s+/)[0] || `screen ${d.id}`));
+  const groups = new Map();
+  for (const d of displays) groups.set(base(d), [...(groups.get(base(d)) ?? []), d]);
+
+  const labels = {};
+  for (const [label, group] of groups) {
+    const byX = [...group].sort((a, b) => a.x - b.x);
+    byX.forEach((d, i) => {
+      if (byX.length === 1) labels[d.id] = label;
+      else if (byX.length === 2) labels[d.id] = `${i === 0 ? 'left' : 'right'} ${label}`;
+      else labels[d.id] = `${label} ${i + 1}`;
+    });
   }
+  return labels;
+}
 
-  get active() {
-    return this.gesture !== null;
+/**
+ * The screen you faced for most of a span: the pinch's own hold.
+ *
+ * Asked when a pinch fires, it answers where you were looking *while* you
+ * pinched, not where your head is the instant the hold completes. Turning and
+ * pinching on arrival lands on the new screen; pinching mid-turn, with no
+ * screen holding most of the span, is "still turning" rather than a guess.
+ *
+ * @param {{t:number, screen:number|null}[]} history Facing readings, oldest first.
+ * @param {number} from
+ * @param {number} to
+ * @returns {{screen:number|null, share:number}|null} The dominant screen (null
+ *   for "no screen") and its share of the span, or null when nothing reached
+ *   `minShare` or there were no readings.
+ */
+export function screenDuring(history, from, to, { minShare = 0.6 } = {}) {
+  if (!(to > from)) return null;
+  const time = new Map();
+  let total = 0;
+  for (let i = 0; i < history.length; i += 1) {
+    const start = Math.max(history[i].t, from);
+    const end = Math.min(history[i + 1]?.t ?? to, to);
+    if (end <= start) continue;
+    time.set(history[i].screen, (time.get(history[i].screen) ?? 0) + end - start);
+    total += end - start;
   }
-
-  cancel() {
-    this.gesture = null;
-    this.from = null;
-    this.target = null;
-    this.startedAt = 0;
-    this.releasedAt = null;
-  }
-
-  start(gesture, screen, now) {
-    this.gesture = gesture;
-    this.from = screen;
-    this.target = screen;
-    this.startedAt = now;
-    this.releasedAt = null;
-  }
-
-  /**
-   * @param {string|null} pose The pose held this frame.
-   * @param {number|null} screen The screen faced this frame.
-   * @param {number} now
-   * @returns {{gesture:string, from:number, to:number}|null} A drop to perform.
-   */
-  update(pose, screen, now) {
-    if (!this.active) return null;
-
-    // Long enough to cross a desk and come back; past it, a forgotten hold
-    // should not move a window when the hand finally drops minutes later.
-    if (now - this.startedAt > this.timeoutMs) {
-      this.cancel();
-      return null;
-    }
-
-    // Keep the last screen actually faced. The face can drop out for a frame
-    // mid-turn; that is not you changing your mind about where it goes.
-    if (screen !== null) this.target = screen;
-
-    if (pose === this.gesture) {
-      this.releasedAt = null;
-      return null;
-    }
-
-    this.releasedAt ??= now;
-    if (now - this.releasedAt < this.releaseMs) return null;
-
-    const { gesture, from, target } = this;
-    this.cancel();
-    return target !== null && target !== from ? { gesture, from, to: target } : null;
-  }
+  if (total === 0) return null;
+  let best = null;
+  for (const [screen, ms] of time) if (!best || ms > best.ms) best = { screen, ms };
+  const share = best.ms / total;
+  return share >= minShare ? { screen: best.screen, share } : null;
 }

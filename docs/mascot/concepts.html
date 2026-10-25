@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot: three directions</title>
+<style>
+  :root { --bg: #f4f2ee; --panel: #fff; --text: #1b1b1f; --dim: #6b6b72; --line: #e6e2da; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lede { color: var(--dim); margin: 0 0 20px; max-width: 72ch; }
+  .concept { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 18px;
+    display: grid; grid-template-columns: 170px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .concept { grid-template-columns: 1fr; } }
+  .hero { display: grid; justify-items: center; gap: 6px; padding: 8px; border-radius: 12px; }
+  .hero h2 { margin: 0; font-size: 16px; }
+  .hero p { margin: 0; color: var(--dim); font-size: 12px; text-align: center; }
+  .states { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .state { display: grid; justify-items: center; gap: 4px; background: #faf8f5; border-radius: 10px; padding: 10px 6px; }
+  .state b { font-size: 12px; } .state span { font-size: 11px; color: var(--dim); text-align: center; }
+
+  /* A stand-in macOS 26 desktop: wallpaper, transparent menu bar, and the orb
+     as Liquid Glass. The real one is AppKit's NSGlassEffectView; this is the
+     closest CSS gets, for choosing. */
+  .desk { position: relative; height: 112px; border-radius: 12px; overflow: hidden;
+    background: radial-gradient(120% 140% at 15% 0%, #ff9f6e 0%, #e2557e 38%, #6a4fd0 72%, #2a2d6e 100%); }
+  .desk.calm { background: radial-gradient(120% 140% at 80% 0%, #bfe3ff 0%, #7fb2e8 40%, #3f6fb5 75%, #1d3466 100%); }
+  .menubar { position: absolute; inset: 0 0 auto; height: 24px; display: flex; justify-content: space-between;
+    padding: 0 12px; align-items: center; font-size: 12px; font-weight: 600; color: rgba(255,255,255,.92);
+    text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass { position: absolute; top: 0; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 10px; color: #fff;
+    background: linear-gradient(180deg, rgba(255,255,255,.30), rgba(255,255,255,.12));
+    -webkit-backdrop-filter: blur(18px) saturate(180%); backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255,255,255,.45); border-top: 0;
+    box-shadow: inset 0 -1px 0 rgba(255,255,255,.35), inset 0 1px 8px rgba(255,255,255,.18), 0 6px 18px rgba(20,10,40,.25); }
+  .glass.tab { height: 26px; padding: 0 10px; border-radius: 0 0 13px 13px; }
+  .glass.pill { height: 46px; padding: 0 18px 0 8px; border-radius: 0 0 23px 23px; top: 0; }
+  .glass > div { white-space: nowrap; }
+  .glass .t1 { font-weight: 600; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass .t2 { font-size: 11px; opacity: .85; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .desks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .desk .cap { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: rgba(255,255,255,.85); }
+  .note { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gesture mascot: three directions</h1>
+  <p class="lede">Built from your four references. Each is shown large, in the four moments that matter most,
+    and at its real size inside a glass notch: 18 px in the resting tab, 32 px when the orb opens to
+    say something. The behaviour is the one already decided in docs/MASCOT-REACTIONS.md: a calm base pose,
+    a half-second reaction per gesture, hands only during reactions, and eyes that look at your screens.</p>
+  <div id="concepts"></div>
+</main>
+
+<script>
+const INK = '#1b1b1f';
+
+// ------------------------------------------------------------ A: vinyl ball
+// The orange vinyl figure: a matte ball, deadpan dot eyes, little arms. The
+// orb itself is the character.
+function vinyl({ gx = 0, gy = 0, eyes = 'open', hands = null, mouth = 'flat', tilt = 0, id = 'a' } = {}) {
+  const ex = gx * 1.3, ey = gy * 1.1;
+  const eye = (cx) => eyes === 'closed'
+    ? `<path d="M${cx - 1.8} 15.4 Q${cx} 16.6 ${cx + 1.8} 15.4" stroke="${INK}" stroke-width="1.2" fill="none" stroke-linecap="round"/>`
+    : eyes === 'wink' && cx > 16
+      ? `<path d="M${cx - 1.8} 15.6 H${cx + 1.8}" stroke="${INK}" stroke-width="1.2" stroke-linecap="round"/>`
+      : `<circle cx="${cx + ex}" cy="${15.4 + ey}" r="1.55" fill="${INK}"/>`;
+  const arm = (x, y, r) => `<rect x="${x - 1.9}" y="${y - 4}" width="3.8" height="8" rx="1.9" fill="url(#${id}-arm)" transform="rotate(${r} ${x} ${y})"/>`;
+  const handSets = {
+    sides: arm(4.6, 19.5, 18) + arm(27.4, 19.5, -18),
+    cover: arm(12.6, 15.2, 72) + arm(19.4, 15.2, -72),
+    ok: arm(27.6, 13.5, -24) + `<circle cx="28.6" cy="9.2" r="1.9" fill="none" stroke="#e07a12" stroke-width="1.3"/>`,
+    shrug: arm(4.2, 13.4, -38) + arm(27.8, 13.4, 38),
+  };
+  const mouths = {
+    flat: `<path d="M14.7 19.8 H17.3" stroke="${INK}" stroke-width="1.15" stroke-linecap="round"/>`,
+    smile: `<path d="M14.4 19.4 Q16 20.8 17.6 19.4" stroke="${INK}" stroke-width="1.15" fill="none" stroke-linecap="round"/>`,
+  };
+  return `
+    <defs>
+      <radialGradient id="${id}-body" cx="36%" cy="30%" r="78%">
+        <stop offset="0" stop-color="#ffc56a"/><stop offset=".55" stop-color="#ffa62e"/><stop offset="1" stop-color="#e8851a"/>
+      </radialGradient>
+      <linearGradient id="${id}-arm" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffad3d"/><stop offset="1" stop-color="#ea8a1d"/></linearGradient>
+    </defs>
+    <g transform="rotate(${tilt} 16 17)">
+      ${hands ? handSets[hands] : ''}
+      <circle cx="16" cy="16.5" r="11.8" fill="url(#${id}-body)"/>
+      <ellipse cx="12" cy="10.6" rx="3.6" ry="2.2" fill="#fff" opacity=".28" transform="rotate(-25 12 10.6)"/>
+      ${hands === 'cover' ? '' : eye(12.6) + eye(19.4)}
+      ${mouths[mouth]}
+      ${hands === 'cover' ? handSets.cover : ''}
+    </g>`;
+}
+
+// ------------------------------------------------------------ B: screen bot
+// The pink-background robot: a teal shell with a white screen and pill eyes.
+// Its antenna is a camera lens, because it is the thing that watches your hand.
+function bot({ gx = 0, gy = 0, eyes = 'open', hands = null, tilt = 0 } = {}) {
+  const ex = gx * 1.6, ey = gy * 1.2;
+  const pill = (x) => eyes === 'closed'
+    ? `<rect x="${x - 1.6}" y="17" width="3.2" height="1.5" rx=".75" fill="${INK}"/>`
+    : eyes === 'wink' && x > 16
+      ? `<rect x="${x - 1.6}" y="16.6" width="3.2" height="1.6" rx=".8" fill="${INK}"/>`
+      : `<rect x="${x - 1.4 + ex}" y="${14 + ey}" width="2.8" height="5.4" rx="1.4" fill="${INK}"/>`;
+  const block = (x, y, w, h) => `<rect x="${x}" y="${y}" width="${w}" height="${h}" rx="1" fill="${INK}"/>`;
+  const handSets = {
+    cover: block(9.6, 13, 6.2, 6.6) + block(17.2, 13, 6.2, 6.6),
+    ok: block(27.2, 9.5, 3.6, 3.2) + `<circle cx="29" cy="7.2" r="1.5" fill="none" stroke="${INK}" stroke-width="1.2"/>`,
+    shrug: block(1.2, 12, 3.4, 3) + block(27.4, 12, 3.4, 3),
+  };
+  return `
+    <g transform="rotate(${tilt} 16 17)">
+      <rect x="14.9" y="3.4" width="2.2" height="4.4" fill="${INK}"/>
+      <circle cx="16" cy="3.6" r="2.2" fill="${INK}"/><circle cx="16" cy="3.6" r=".9" fill="#3cc9b4"/>
+      <rect x="4.6" y="7.4" width="22.8" height="19.6" rx="5.6" fill="${INK}"/>
+      <rect x="6.6" y="9.4" width="18.8" height="15.6" rx="3.8" fill="#3cc9b4"/>
+      <rect x="9.2" y="10.6" width="15.2" height="12.6" rx="2.8" fill="#fff"/>
+      ${hands === 'cover' ? '' : pill(13.4) + pill(20.2)}
+      ${hands ? handSets[hands] : ''}
+    </g>`;
+}
+
+// ------------------------------------------------------------ C: half-moon eyes
+// The orange duck: a soft trapezoid that echoes the notch it lives in, with
+// half-moon eyes whose dark half slides toward the screen you face, and coral
+// mitten hands.
+function moon({ gx = 0.6, eyes = 'open', hands = null, tilt = 0, id = 'c' } = {}) {
+  const eye = (cx) => {
+    if (eyes === 'closed') return `<path d="M${cx - 3.2} 15.6 H${cx + 3.2}" stroke="${INK}" stroke-width="1.3" stroke-linecap="round"/>`;
+    if (eyes === 'wink' && cx > 16) return `<path d="M${cx - 3} 14.6 Q${cx} 12.6 ${cx + 3} 14.6" stroke="${INK}" stroke-width="1.3" fill="none" stroke-linecap="round"/>`;
+    const p = cx + gx * 1.7;
+    return `<clipPath id="${id}-e${cx}"><path d="M${cx - 3.3} 15.6 A3.3 3.3 0 0 1 ${cx + 3.3} 15.6 Z"/></clipPath>
+      <path d="M${cx - 3.3} 15.6 A3.3 3.3 0 0 1 ${cx + 3.3} 15.6 Z" fill="#fff8ee"/>
+      <circle cx="${p}" cy="15.6" r="2.6" fill="${INK}" clip-path="url(#${id}-e${cx})"/>`;
+  };
+  const mitt = (x, y, r) => `<rect x="${x - 2.4}" y="${y - 2.8}" width="4.8" height="5.6" rx="2.2" fill="#e5642b" transform="rotate(${r} ${x} ${y})"/>`;
+  const handSets = {
+    cover: mitt(12.4, 14.4, 0) + mitt(19.6, 14.4, 0),
+    ok: mitt(28.4, 12.6, -18) + `<circle cx="28.6" cy="8.4" r="1.7" fill="none" stroke="#e5642b" stroke-width="1.3"/>`,
+    shrug: mitt(3.2, 12.6, -30) + mitt(28.8, 12.6, 30),
+  };
+  return `
+    <defs><linearGradient id="${id}-body" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6b64f"/><stop offset="1" stop-color="#ec9a2d"/></linearGradient></defs>
+    <g transform="rotate(${tilt} 16 17)">
+      <path d="M11.2 6.2 H20.8 Q22.6 6.2 23.4 7.8 L27.9 21.4 Q28.6 24.4 25.6 24.6 Q16 25.8 6.4 24.6 Q3.4 24.4 4.1 21.4 L8.6 7.8 Q9.4 6.2 11.2 6.2Z" fill="url(#${id}-body)"/>
+      <path d="M9 24.6 Q12 28.4 15.2 26.2 L13.6 24.8Z M23 24.6 Q20 28.4 16.8 26.2 L18.4 24.8Z" fill="#e5642b"/>
+      ${hands === 'cover' ? '' : eye(11.8) + eye(20.2)}
+      ${hands ? handSets[hands] : ''}
+    </g>`;
+}
+
+let uid = 0;
+const svg = (draw, size, o = {}) => {
+  uid += 1;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true">${draw({ ...o, id: `m${uid}` })}</svg>`;
+};
+
+const CONCEPTS = [
+  { key: 'A', name: 'Vinyl ball', draw: vinyl, from: 'Your orange vinyl figure',
+    why: 'It is the orb: the ball you click is the character. Deadpan dot eyes say a lot with almost nothing.',
+    states: [{}, { hands: 'cover' }, { hands: 'ok', eyes: 'wink', mouth: 'smile' }, { hands: 'shrug', tilt: 8 }] },
+  { key: 'B', name: 'Screen bot', draw: bot, from: 'Your pink robot',
+    why: 'A little monitor with a camera for an antenna: screens and a webcam, which is Gesture in one picture. Pill eyes stay sharp at 18 px.',
+    states: [{}, { hands: 'cover' }, { hands: 'ok', eyes: 'wink' }, { hands: 'shrug', tilt: 8 }] },
+  { key: 'C', name: 'Half-moon eyes', draw: moon, from: 'Your orange duck',
+    why: 'The trapezoid echoes the notch it lives in. The dark half of each eye slides toward the screen you face, so the gaze reads at any size.',
+    states: [{ gx: 0.6 }, { hands: 'cover' }, { hands: 'ok', eyes: 'wink' }, { hands: 'shrug', tilt: 8, gx: -0.6 }] },
+];
+const LABELS = [['Awake', 'looking at your screen'], ['Camera off', 'covers its eyes, like you cover the lens'],
+  ['OK sign → armed', 'a wink and an OK'], ['Refused', 'a shrug']];
+
+document.getElementById('concepts').innerHTML = CONCEPTS.map((c) => `
+  <section class="concept">
+    <div class="hero">${svg(c.draw, 128, c.states[0])}<h2>${c.key}. ${c.name}</h2><p>${c.from}</p></div>
+    <div>
+      <div class="states">${c.states.map((s, i) => `<div class="state">${svg(c.draw, 56, s)}<b>${LABELS[i][0]}</b><span>${LABELS[i][1]}</span></div>`).join('')}</div>
+      <div class="desks">
+        <div class="desk"><div class="menubar"><span>  Finder  File  Edit  View</span><span>Wi‑Fi  10:42</span></div>
+          <div class="glass tab">${svg(c.draw, 18, c.states[0])}</div><span class="cap">At rest: 18 px in a glass tab</span></div>
+        <div class="desk calm"><div class="menubar"><span>  Notes  File  Edit</span><span>Wi‑Fi  10:42</span></div>
+          <div class="glass pill">${svg(c.draw, 32, c.states[2])}<div><div class="t1">OK sign → armed</div><div class="t2">Ready</div></div></div>
+          <span class="cap">Saying something: 32 px</span></div>
+      </div>
+      <p class="note">${c.why}</p>
+    </div>
+  </section>`).join('');
+</script>
+</body>
+</html>

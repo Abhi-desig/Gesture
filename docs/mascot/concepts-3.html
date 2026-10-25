@@ -1,0 +1,231 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot: four stories</title>
+<style>
+  :root { --bg: #f4f2ee; --panel: #fff; --text: #1b1b1f; --dim: #6b6b72; --line: #e6e2da; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lede { color: var(--dim); margin: 0 0 20px; max-width: 72ch; }
+  .concept { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 18px;
+    display: grid; grid-template-columns: 190px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .concept { grid-template-columns: 1fr; } }
+  .hero { display: grid; justify-items: center; gap: 6px; padding: 10px; border-radius: 14px; }
+  .hero h2 { margin: 0; font-size: 17px; }
+  .hero p { margin: 0; color: var(--dim); font-size: 12px; text-align: center; }
+  .story { margin: 0 0 12px; font-size: 13px; max-width: 70ch; }
+  .states { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .state { display: grid; justify-items: center; gap: 4px; background: #faf8f5; border-radius: 10px; padding: 10px 4px; }
+  .state b { font-size: 11.5px; text-align: center; } .state span { font-size: 10.5px; color: var(--dim); text-align: center; }
+
+  .desk { position: relative; height: 112px; border-radius: 12px; overflow: hidden;
+    background: radial-gradient(120% 140% at 15% 0%, #ff9f6e 0%, #e2557e 38%, #6a4fd0 72%, #2a2d6e 100%); }
+  .desk.calm { background: radial-gradient(120% 140% at 80% 0%, #bfe3ff 0%, #7fb2e8 40%, #3f6fb5 75%, #1d3466 100%); }
+  .menubar { position: absolute; inset: 0 0 auto; height: 24px; display: flex; justify-content: space-between;
+    padding: 0 12px; align-items: center; font-size: 12px; font-weight: 600; color: rgba(255,255,255,.92);
+    text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 10px; color: #fff; white-space: nowrap; overflow: hidden;
+    background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.12));
+    -webkit-backdrop-filter: blur(18px) saturate(180%); backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255,255,255,.5);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -6px 12px rgba(255,255,255,.12), 0 6px 18px rgba(20,10,40,.25); }
+  .glass.tab { height: 30px; padding: 0 6px; border-radius: 15px; }
+  .glass.pill { height: 44px; padding: 0 18px 0 6px; border-radius: 22px; }
+  .glass .t1 { font-weight: 600; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass .t2 { font-size: 11px; opacity: .85; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .desks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .desk .cap { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: rgba(255,255,255,.85); }
+
+  /* A little life in the big drawings, so the personality shows. */
+  @keyframes press { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1.2px); } }
+  @keyframes sway { 0%, 100% { transform: rotate(-4deg); } 50% { transform: rotate(4deg); } }
+  @keyframes bob { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(1.4px); } }
+  @keyframes flicker { 0%, 100% { opacity: .95; } 45% { opacity: .82; } 55% { opacity: 1; } }
+  .hero .anim-press { animation: press 1.6s ease-in-out infinite; transform-box: fill-box; }
+  .hero .anim-sway { animation: sway 2.4s ease-in-out infinite; transform-origin: 16px 30px; }
+  .hero .anim-bob { animation: bob 1.8s ease-in-out infinite; }
+  .hero .anim-flicker { animation: flicker 2.2s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .hero * { animation: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gesture mascot: four stories</h1>
+  <p class="lede">Instead of a face on a shape, each of these starts from an idea about Gesture, and each one
+    lives <i>in</i> the glass island rather than just sitting in it. The big drawing moves a little, to show
+    its personality. Then come five moments, and the real size at the top of the screen.</p>
+  <div id="concepts"></div>
+</main>
+
+<script>
+const INK = '#17161c';
+let uid = 0;
+
+// ------------------------------------------------------------ H: Mime
+// The art of gestures, in its invisible box: the glass island. White face,
+// mime-stripe eyes, a red mouth, a beret, and a striped collar (your vinyl
+// figure's socks). Gloves do the gestures.
+function mime({ look = 0, eyes = 'open', gloves = 'press', tilt = 0, anim = false }) {
+  const lx = look * 1.1;
+  const eye = (x) => {
+    if (eyes === 'closed') return `<path d="M${x - 1.5} 15.2 Q${x} 16.2 ${x + 1.5} 15.2" stroke="${INK}" stroke-width="1.1" fill="none" stroke-linecap="round"/>`;
+    if (eyes === 'wink' && x > 16) return `<path d="M${x - 1.5} 15 H${x + 1.5}" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/>`;
+    return `<path d="M${x} 12.2 V18.2" stroke="${INK}" stroke-width=".55" stroke-linecap="round" opacity=".55"/>
+      <circle cx="${x + lx}" cy="15.2" r="1.2" fill="${INK}"/>`;
+  };
+  const glove = (x, y, r = 0, flat = false) => flat
+    ? `<g transform="translate(${x} ${y}) rotate(${r})"><rect x="-2.6" y="-3.1" width="5.2" height="6.2" rx="2.4" fill="#fff" stroke="${INK}" stroke-width=".9"/>
+        <path d="M-1.1 -3 V-1 M0.4 -3.1 V-1 M1.8 -2.9 V-1" stroke="${INK}" stroke-width=".55" stroke-linecap="round"/></g>`
+    : `<g transform="translate(${x} ${y}) rotate(${r})"><circle r="2.6" fill="#fff" stroke="${INK}" stroke-width=".9"/></g>`;
+  const gloveSets = {
+    press: `<g class="${anim ? 'anim-press' : ''}">${glove(6.2, 19.6, -8, true)}${glove(25.8, 19.6, 8, true)}</g>`,
+    none: '',
+    cover: glove(12.6, 15.2, 0, true) + glove(19.4, 15.2, 0, true),
+    ok: `${glove(27, 12.6)}<circle cx="27.6" cy="9.2" r="1.6" fill="none" stroke="${INK}" stroke-width=".9"/>`,
+    shrug: glove(3.8, 15.4, -30, true) + glove(28.2, 15.4, 30, true),
+  };
+  return `<g transform="rotate(${tilt} 16 18)">
+      <path d="M8.6 26.4 Q16 31.6 23.4 26.4 L22.4 23.6 Q16 26 9.6 23.6 Z" fill="#fff" stroke="${INK}" stroke-width=".9"/>
+      <path d="M10.6 25.2 L11 27.8 M13.2 25.8 L13.4 28.8 M16 26 V29.2 M18.8 25.8 L18.6 28.8 M21.4 25.2 L21 27.8" stroke="${INK}" stroke-width="1.15"/>
+      <ellipse cx="16" cy="15.6" rx="8.4" ry="9.4" fill="#fff" stroke="${INK}" stroke-width="1"/>
+      <path d="M8.4 9.6 Q9.8 3.2 18 4.2 Q25.2 5.4 24 10.4 Q16.6 7.6 8.4 9.6 Z" fill="${INK}"/>
+      <circle cx="18.4" cy="3.6" r="1.1" fill="${INK}"/>
+      <path d="M11.2 11.6 Q12.6 10.6 14 11.4 M18 11.4 Q19.4 10.6 20.8 11.6" stroke="${INK}" stroke-width=".9" fill="none" stroke-linecap="round"/>
+      ${gloves === 'cover' ? '' : eye(12.6) + eye(19.4)}
+      <path d="M14.6 20.4 Q16 21.6 17.4 20.4 Q16 20.8 14.6 20.4 Z" fill="#e5483b" stroke="#e5483b" stroke-width=".8" stroke-linejoin="round"/>
+      ${gloveSets[gloves]}
+    </g>`;
+}
+
+// ------------------------------------------------------------ I: Shadow
+// The orb is a lantern, and your hand throws a shadow rabbit onto the glass:
+// two raised fingers for ears, the eye a hole the light shines through. A
+// refused gesture droops the ears. Camera off: the lantern dims.
+function shadow({ ears = 'up', eyeLook = 0.6, lamp = 1, id, anim = false }) {
+  const earSets = {
+    up: 'M12.4 12.2 Q10.2 4 12.2 2.6 Q14.4 2.2 15.2 11.2 Z M15.8 11.2 Q17.2 2.6 19.6 3.2 Q21 5 18.4 12.4 Z',
+    droop: 'M12.2 12.4 Q6.2 9 5.4 6.4 Q6.2 4.8 8.6 6.4 Q12.8 9 14.8 11.4 Z M17.2 11.4 Q21.6 8.6 25.2 9.2 Q26.6 10.6 24.6 11.8 Q21 12.6 18.6 12.8 Z',
+    ok: 'M12.4 12.2 Q10.2 4 12.2 2.6 Q14.4 2.2 15.2 11.2 Z',
+  };
+  return `<defs>
+      <radialGradient id="${id}-lamp" cx="50%" cy="45%" r="60%"><stop offset="0" stop-color="#ffe6a8"/><stop offset=".6" stop-color="#ffbf5e"/><stop offset="1" stop-color="#f08a3e"/></radialGradient>
+      <filter id="${id}-soft"><feGaussianBlur stdDeviation=".35"/></filter>
+    </defs>
+    <circle cx="16" cy="16" r="14.4" fill="url(#${id}-lamp)" opacity="${lamp}" class="${anim ? 'anim-flicker' : ''}"/>
+    <g filter="url(#${id}-soft)" fill="#2b2140" opacity="${lamp < 0.5 ? 0.35 : 0.92}">
+      <path d="${earSets[ears]}"/>
+      <path d="M9.6 17.6 Q9.6 11.4 16.4 11 Q23.6 10.8 24.6 16.4 Q25.2 19.2 22.6 20 L19.4 20.8 Q18.6 25.6 13.4 26.2 Q9.6 25 9.6 17.6 Z"/>
+      ${ears === 'ok' ? '<circle cx="21.6" cy="8.6" r="2.4" fill="none" stroke="#2b2140" stroke-width="1.5"/>' : ''}
+    </g>
+    ${lamp < 0.5 ? '' : `<circle cx="${19.2 + eyeLook * 0.8}" cy="15.4" r="1.25" fill="#fff4cf"/>`}`;
+}
+
+// ------------------------------------------------------------ J: Sock
+// A sock puppet: your vinyl figure's red-striped sports sock, with a hand
+// inside it, which is what Gesture is. Mismatched button eyes; the mouth is
+// the fold at the toe. The island is its puppet theatre.
+function sock({ mouth = 'shut', eyes = 'open', tilt = 0, look = 0.4, anim = false }) {
+  const lx = look * 0.9;
+  const button = (x, y, r) => eyes === 'closed'
+    ? `<path d="M${x - r} ${y} Q${x} ${y + r * 0.7} ${x + r} ${y}" stroke="${INK}" stroke-width="1.1" fill="none" stroke-linecap="round"/>`
+    : `<circle cx="${x}" cy="${y}" r="${r}" fill="${INK}"/><circle cx="${x - r * 0.3 + lx}" cy="${y - r * 0.3}" r="${r * 0.32}" fill="#fff"/>`;
+  const mouths = {
+    shut: 'M8.2 14.6 Q12 17.4 16.6 15.6',
+    open: 'M8.2 14.2 Q12 20.4 17 15.4',
+  };
+  return `<g class="${anim ? 'anim-sway' : ''}" style="transform-origin: 16px 31px">
+    <g transform="rotate(${tilt} 16 28)">
+      <path d="M20.6 31 V17.4 Q20.6 9.6 14 7.8 Q8 6.4 6.2 11.4 Q5 15 8.2 16.4 Q11.6 17.6 12.6 20 V31 Z" fill="#ffb21f"/>
+      <path d="M12.6 22.4 H20.6 M12.6 25 H20.6" stroke="#e5483b" stroke-width="1.5"/>
+      <path d="M12.6 28.4 V31 H20.6 V28.4 Z" fill="#fff6e8"/>
+      <path d="${mouths[mouth]}" stroke="${INK}" stroke-width="1.15" fill="${mouth === 'open' ? '#c2361f' : 'none'}" stroke-linecap="round"/>
+      ${eyes === 'wink' ? button(11.4, 10.4, 1.5) + `<path d="M15 10.6 H17.6" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/>` : button(11.4, 10.4, 1.5) + button(16.4, 10.8, 2)}
+    </g></g>`;
+}
+
+// ------------------------------------------------------------ K: Peeper
+// It lives in the notch: at rest it hangs from the top edge by two hands with
+// only its side-eyes over the rim (your duck's half-moon eyes); to react it
+// drops into view. Pink from your robot, orange hands from your figure.
+function peeper({ drop = 0, look = 0.7, eyes = 'open', hands = 'hang', id, anim = false }) {
+  const y = drop;
+  const eye = (cx) => {
+    if (eyes === 'closed') return `<path d="M${cx - 2.8} ${15.6 + y} H${cx + 2.8}" stroke="${INK}" stroke-width="1.3" stroke-linecap="round"/>`;
+    if (eyes === 'wink' && cx > 16) return `<path d="M${cx - 2.6} ${15.2 + y} Q${cx} ${13.2 + y} ${cx + 2.6} ${15.2 + y}" stroke="${INK}" stroke-width="1.3" fill="none" stroke-linecap="round"/>`;
+    const p = cx + look * 1.5;
+    return `<clipPath id="${id}-e${cx}"><path d="M${cx - 2.9} ${15.6 + y} A2.9 2.9 0 0 1 ${cx + 2.9} ${15.6 + y} Z"/></clipPath>
+      <path d="M${cx - 2.9} ${15.6 + y} A2.9 2.9 0 0 1 ${cx + 2.9} ${15.6 + y} Z" fill="#fff8ee"/>
+      <circle cx="${p}" cy="${15.6 + y}" r="2.3" fill="${INK}" clip-path="url(#${id}-e${cx})"/>`;
+  };
+  const handSets = {
+    hang: `<rect x="7.4" y="1.4" width="4.4" height="5.4" rx="2.2" fill="#ff9a3c"/><rect x="20.2" y="1.4" width="4.4" height="5.4" rx="2.2" fill="#ff9a3c"/>
+      <path d="M9.6 6.4 V${9 + y} M22.4 6.4 V${9 + y}" stroke="#ff5fa2" stroke-width="2.4" stroke-linecap="round"/>`,
+    cover: `<rect x="9.4" y="${12.2 + y}" width="5.6" height="5" rx="2.4" fill="#ff9a3c"/><rect x="17" y="${12.2 + y}" width="5.6" height="5" rx="2.4" fill="#ff9a3c"/>`,
+    ok: `<rect x="20.2" y="1.4" width="4.4" height="5.4" rx="2.2" fill="#ff9a3c"/><path d="M22.4 6.4 V${9 + y}" stroke="#ff5fa2" stroke-width="2.4" stroke-linecap="round"/>
+      <circle cx="5.6" cy="${18 + y}" r="2" fill="none" stroke="#ff9a3c" stroke-width="1.5"/>`,
+    shrug: `<rect x="2" y="${11 + y}" width="4.4" height="5" rx="2.2" fill="#ff9a3c"/><rect x="25.6" y="${11 + y}" width="4.4" height="5" rx="2.2" fill="#ff9a3c"/>`,
+  };
+  return `<g class="${anim ? 'anim-bob' : ''}">
+      <path d="M6 ${8 + y} Q6 ${6 + y} 9 ${6.2 + y} H23 Q26 ${6 + y} 26 ${8 + y} V${18 + y} Q26 ${27 + y} 16 ${27 + y} Q6 ${27 + y} 6 ${18 + y} Z" fill="#ff5fa2"/>
+      <path d="M6 ${10 + y} Q16 ${7.6 + y} 26 ${10 + y}" stroke="#fff" stroke-opacity=".28" stroke-width="1" fill="none"/>
+      ${hands === 'cover' ? '' : eye(12) + eye(20)}
+      <path d="M14.8 ${21.2 + y} Q16 ${21.8 + y} 17.2 ${21.2 + y}" stroke="${INK}" stroke-width="1" fill="none" stroke-linecap="round"/>
+      ${handSets[hands]}
+    </g>`;
+}
+
+const svg = (draw, size, o = {}) => {
+  uid += 1;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true" overflow="visible">${draw({ ...o, id: `m${uid}` })}</svg>`;
+};
+
+const CONCEPTS = [
+  { key: 'H', name: 'Mime', draw: mime, idea: 'The art of gestures',
+    story: 'Gesture is gestures, and a mime is the master of them. The glass island is its invisible box: at rest it presses its white gloves against the glass. It mimes back the gesture you just made, shrugs at a refusal, and covers its eyes when the camera is off. The striped collar is your vinyl figure’s socks.',
+    hero: { gloves: 'press', look: 0.6 },
+    states: [[{ gloves: 'press', look: 0.6 }, 'At rest', 'hands on the glass'], [{ gloves: 'cover' }, 'Camera off', 'covers its eyes'],
+      [{ gloves: 'ok', eyes: 'wink' }, 'OK → armed', 'mimes it back'], [{ gloves: 'shrug', tilt: 8, look: -0.6 }, 'Refused', 'the mime shrug'],
+      [{ gloves: 'none', eyes: 'closed' }, 'Disarmed', 'asleep in the box']] },
+  { key: 'I', name: 'Shadow', draw: shadow, idea: 'Your hand, as shadow play',
+    story: 'The orb becomes a little lantern, and your hand throws a shadow rabbit onto the glass: two raised fingers for its ears, its eye a hole the light shines through. It’s the oldest hand gesture there is. The ears droop at a refusal, and the lantern dims when the camera is off.',
+    hero: { ears: 'up' },
+    states: [[{ ears: 'up' }, 'At rest', 'ears up, watching'], [{ ears: 'up', lamp: 0.25 }, 'Camera off', 'the lantern dims'],
+      [{ ears: 'ok' }, 'OK → armed', 'one ear makes the OK'], [{ ears: 'droop', eyeLook: -0.6 }, 'Refused', 'ears droop'],
+      [{ ears: 'droop', lamp: 0.55 }, 'Disarmed', 'low light, ears down']] },
+  { key: 'J', name: 'Sock', draw: sock, idea: 'A hand inside a puppet',
+    story: 'A sock puppet is a hand in disguise, and Gesture runs on your hand. This one is your vinyl figure’s red-striped sports sock, with mismatched button eyes; its mouth is the fold at the toe. The island is its puppet theatre: it pops up from the bottom edge to react.',
+    hero: { look: 0.4 },
+    states: [[{ look: 0.5 }, 'At rest', 'looking at your screen'], [{ eyes: 'closed', tilt: 18 }, 'Camera off', 'flops over, asleep'],
+      [{ mouth: 'open', eyes: 'wink' }, 'OK → armed', 'a cheeky wink'], [{ tilt: -16, look: -0.6 }, 'Refused', 'droops sideways'],
+      [{ eyes: 'closed' }, 'Disarmed', 'eyes shut']] },
+  { key: 'K', name: 'Peeper', draw: peeper, idea: 'It lives in the notch',
+    story: 'A small creature that lives in the notch. At rest it hangs from the top edge by its two hands, and only its side-eyes peek over the rim (your duck’s half-moon eyes). To react, it drops into view and acts it out. Pink from your robot, orange hands from your vinyl figure.',
+    hero: { drop: 0 },
+    states: [[{ look: 0.7 }, 'At rest', 'hanging, peeking'], [{ hands: 'cover', drop: 1 }, 'Camera off', 'covers its eyes'],
+      [{ hands: 'ok', eyes: 'wink', drop: 1 }, 'OK → armed', 'lets go of one hand'], [{ hands: 'shrug', drop: 2, look: -0.6 }, 'Refused', 'drops down, shrugs'],
+      [{ eyes: 'closed' }, 'Disarmed', 'dozes off, hanging']] },
+];
+
+document.getElementById('concepts').innerHTML = CONCEPTS.map((c) => `
+  <section class="concept">
+    <div class="hero">${svg(c.draw, 150, { ...c.hero, anim: true })}<h2>${c.key}. ${c.name}</h2><p>${c.idea}</p></div>
+    <div>
+      <p class="story">${c.story}</p>
+      <div class="states">${c.states.map(([s, b, t]) => `<div class="state">${svg(c.draw, 52, s)}<b>${b}</b><span>${t}</span></div>`).join('')}</div>
+      <div class="desks">
+        <div class="desk"><div class="menubar"><span>  Finder  File  Edit</span><span>Wi‑Fi  10:42</span></div>
+          <div class="glass tab">${svg(c.draw, 24, c.states[0][0])}</div><span class="cap">At rest: 24 px in the glass island</span></div>
+        <div class="desk calm"><div class="menubar"><span>  Notes</span><span>10:42</span></div>
+          <div class="glass pill">${svg(c.draw, 34, c.states[2][0])}<div><div class="t1">OK sign → armed</div><div class="t2">Ready</div></div></div>
+          <span class="cap">Saying something: 34 px</span></div>
+      </div>
+    </div>
+  </section>`).join('');
+</script>
+</body>
+</html>

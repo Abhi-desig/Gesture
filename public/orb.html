@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Gesture</title>
+    <link rel="stylesheet" href="./ui/mascot.css" />
+    <link rel="stylesheet" href="./orb/orb.css" />
+  </head>
+  <body>
+    <!-- Jelly, for the orb's island under the camera. The desktop app draws
+         the island itself (a Liquid Glass notch, the words, the light) and
+         keeps this page in a fixed box at its top centre; orb.js decides what
+         the island shows. -->
+    <div id="jelly" class="jelly">
+      <!-- Jelly is ui/mascot.svg, mounted by orb.js. -->
+      <span id="ball" class="ball mascot" data-mood="off" aria-hidden="true"></span>
+    </div>
+    <!-- In a plain browser, the island's words, for previews. -->
+    <p id="preview" class="preview" hidden>
+      <b id="line1"></b>
+      <span id="line2"></span>
+    </p>
+    <script type="module" src="./orb/orb.js"></script>
+  </body>
+</html>

@@ -7,7 +7,11 @@ node_modules
 
 # Vendored MediaPipe, ~31 MB all told — fetch with `npm run fetch-model`
 public/models/*.task
+public/models/*.tflite
 public/vendor/
+
+# Clips played into the Lab with ?labclip= while developing without a camera
+public/lab-clips/
 
 # Compiled Swift key-sending helper — build with `npm run build:native`
 native/build/

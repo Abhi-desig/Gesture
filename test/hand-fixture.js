@@ -71,7 +71,13 @@ const PRESETS = {
     fingers: { index: 'extended', middle: 'extended', ring: 'extended', pinky: 'extended' },
     thumb: 'tucked',
   },
-  // The index alone, straight out, thumb folded across the middle finger.
+  // Thumb and index in a circle, the other three fingers up: "OK".
+  ok_sign: {
+    fingers: { index: 'pinching', middle: 'extended', ring: 'extended', pinky: 'extended' },
+    thumb: 'pinch',
+  },
+  // The index alone, straight out, thumb folded across the middle finger. Not
+  // a gesture since v2, but other shapes are built from it.
   point: {
     fingers: { index: 'extended', middle: 'curled', ring: 'curled', pinky: 'curled' },
     thumb: 'tucked',

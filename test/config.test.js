@@ -3,7 +3,14 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import { resolveBackend } from '../server/backends/index.js';
-import { ConfigStore, validate } from '../server/config.js';
+import {
+  ConfigStore,
+  EDITABLE_ACTIONS,
+  KNOWN_GESTURES,
+  applyBindingEdit,
+  configVersion,
+  validate,
+} from '../server/config.js';
 
 const base = {
   gestures: { fist: 'audio_play' },
@@ -123,10 +130,10 @@ test('a backend is not disqualified by a client action it cannot press', () => {
 test('a screen action is a binding, not a shortcut, and reaches the page', () => {
   // Like toggle_armed it is never pressed, so it must not go through the key
   // parser; the page needs the list to know which gestures carry a screen.
-  const { gestures, settings } = validate({ ...base, gestures: { point: 'focus_screen' } });
-  assert.equal(gestures.point.combo, 'focus_screen');
-  assert.equal(gestures.point.screen, true);
-  assert.equal(gestures.point.parsed, undefined);
+  const { gestures, settings } = validate({ ...base, gestures: { pinch: 'focus_screen' } });
+  assert.equal(gestures.pinch.combo, 'focus_screen');
+  assert.equal(gestures.pinch.screen, true);
+  assert.equal(gestures.pinch.parsed, undefined);
   assert.equal(settings.screenMaxAngle, 20);
   assert.equal(settings.screenMovesPointer, true);
 
@@ -142,12 +149,12 @@ test('a backend is not disqualified by a screen action it cannot press', () => {
   // `parsed`, so without the skip every backend looks incapable.
   const bindings = validate({
     ...base,
-    gestures: { point: 'focus_screen', fist: 'audio_play' },
+    gestures: { pinch: 'focus_screen', fist: 'audio_play' },
   }).gestures;
   const messages = [];
   return resolveBackend('auto', bindings, { log: (m) => messages.push(m) }).then(() => {
     assert.ok(
-      !messages.some((m) => m.includes('cannot send point')),
+      !messages.some((m) => m.includes('cannot send pinch')),
       `screen action should not count against a backend: ${messages.join(' | ')}`,
     );
   });
@@ -181,4 +188,103 @@ test('customMaxDistance and feedbackSound have defaults and reach the page', () 
   const payload = store.clientPayload();
   assert.equal(typeof payload.feedbackSound, 'boolean');
   assert.equal(typeof payload.tuning.customMaxDistance, 'number');
+});
+
+// ------------------------------------------------------- the locked set (v2)
+
+test('the shipped gesture set is the locked set', () => {
+  // Locked on 24 Oct 2026 from the research in docs/ROADMAP.md, then changed
+  // by choice on 25 Oct after trying it live (see the last two lines). Changing
+  // a default means changing this test, on purpose, with the reason for it.
+  const shippedConfig = JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
+  assert.deepEqual(shippedConfig.gestures, {
+    ok_sign: 'toggle_armed', // "yes" in a mid-air TV study (Dim et al. 2016)
+    pinch: 'focus_screen', // look, then pinch (Vision Pro's select)
+    swipe_left: 'space_right', // as on a Mac trackpad
+    swipe_right: 'space_left',
+    // Office additions, 24 Oct 2026, from the 8 most annoying daily tasks.
+    // shh is a candidate: no study tests it for mute, so it stays only if the
+    // check-up shows ≥ 90% success with no misfires.
+    shh: 'cmd+shift+a', // Zoom mute, with its global shortcut on
+    swipe_up: 'pagedown', // up/down for up/down controls (Dim et al. 2016);
+    swipe_down: 'pageup', //   the page moves with the hand, as on a trackpad
+    // Chosen live on 25 Oct over close-your-hand (play) and cover (lock),
+    // knowing the camera reads a thumbs-up or a resting fist as a fist.
+    fist: 'cmd+ctrl+q',
+    open_palm: 'audio_play', // after a 1.2 s hold
+  });
+  assert.equal(shippedConfig.holdMs.ok_sign, 500);
+  assert.equal(shippedConfig.holdMs.shh, 400);
+  assert.equal(shippedConfig.holdMs.open_palm, 1200);
+});
+
+test('the office actions are on the list the page offers', () => {
+  for (const action of ['pagedown', 'pageup', 'cmd+shift+a', 'cmd+shift+v', 'right', 'left']) {
+    assert.ok(EDITABLE_ACTIONS.includes(action), action);
+  }
+  for (const name of ['shh', 'swipe_up', 'swipe_down']) assert.ok(KNOWN_GESTURES.includes(name), name);
+});
+
+test('the new gestures are known, and point says what replaced it', () => {
+  for (const name of ['ok_sign', 'grab', 'cover']) assert.ok(KNOWN_GESTURES.includes(name), name);
+  assert.ok(!KNOWN_GESTURES.includes('point'));
+  const { warnings } = validate({ gestures: { point: 'focus_screen' } });
+  assert.match(warnings.join(' '), /point was removed.*pinch/);
+  assert.throws(() => validate({ ...base, holdMs: { default: 180, point: 350 } }), /point was removed/);
+});
+
+// ------------------------------------------------------- editing in the app
+
+const shipped = () => JSON.parse(readFileSync(new URL('../config.json', import.meta.url), 'utf8'));
+
+test('every action the page can offer is one the validator accepts', () => {
+  for (const action of EDITABLE_ACTIONS) {
+    assert.doesNotThrow(() => validate({ gestures: { fist: action } }), action);
+  }
+  assert.ok(!EDITABLE_ACTIONS.includes('escape'), 'the panic key is never on offer');
+});
+
+test('an edit changes only the gestures it names, and keeps every other setting', () => {
+  const raw = shipped();
+  const { raw: next } = applyBindingEdit(raw, { open_palm: 'audio_next' });
+  assert.equal(next.gestures.open_palm, 'audio_next');
+  assert.equal(next.gestures.pinch, raw.gestures.pinch);
+  assert.deepEqual({ ...next, gestures: null }, { ...raw, gestures: null });
+  assert.equal(raw.gestures.open_palm, 'audio_play', 'the input is not mutated');
+  assert.doesNotThrow(() => validate(next));
+});
+
+test('null unbinds; taught gestures can be given a job', () => {
+  const { raw: next } = applyBindingEdit(shipped(), { fist: null, 'custom:wave': 'audio_next' });
+  assert.equal('fist' in next.gestures, false);
+  assert.equal(next.gestures['custom:wave'], 'audio_next');
+});
+
+test('the page cannot choose a shortcut that is not on the list', () => {
+  // The safety boundary: a compromised page may pick between listed actions,
+  // never make a gesture press an arbitrary key.
+  const { errors } = applyBindingEdit(shipped(), { fist: 'cmd+q' });
+  assert.match(errors.join(' '), /can't be chosen here/);
+});
+
+test('a hand-written shortcut survives as long as the edit leaves it alone', () => {
+  const raw = { ...shipped(), gestures: { ...shipped().gestures, fist: 'cmd+shift+m' } };
+  const { raw: next } = applyBindingEdit(raw, { fist: 'cmd+shift+m', pinch: 'toggle_armed' });
+  assert.equal(next.gestures.fist, 'cmd+shift+m');
+});
+
+test('edits to unknown gestures, empty edits and short-form configs are refused', () => {
+  assert.match(applyBindingEdit(shipped(), { wiggle: 'audio_play' }).errors.join(' '), /never emitted/);
+  assert.match(applyBindingEdit(shipped(), {}).errors.join(' '), /nothing to change/);
+  assert.match(applyBindingEdit({ fist: 'audio_play' }, { fist: 'audio_next' }).errors.join(' '), /short form/);
+  assert.match(applyBindingEdit(shipped(), { fist: 42 }).errors.join(' '), /must be set to an action/);
+});
+
+test('the file version changes whenever the text does', () => {
+  assert.equal(configVersion('{"a":1}'), configVersion('{"a":1}'));
+  assert.notEqual(configVersion('{"a":1}'), configVersion('{"a":2}'));
+  const store = new ConfigStore(new URL('../config.json', import.meta.url).pathname);
+  store.load();
+  assert.equal(store.clientPayload().version, configVersion(readFileSync(new URL('../config.json', import.meta.url), 'utf8')));
+  assert.deepEqual(store.clientPayload().editableActions, EDITABLE_ACTIONS);
 });

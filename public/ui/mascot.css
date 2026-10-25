@@ -1,0 +1,390 @@
+/* Jelly's moods, for every place it appears: the page header (styles.css) and
+   the orb (orb/orb.css). The art is ui/mascot.svg, which holds every mood's
+   parts; this file shows the ones a mood needs and moves them. Part ids and
+   classes are the contract in docs/MASCOT.md.
+
+   Everything is keyed off data-mood, data-blink and the custom properties
+   --gaze-x, --gaze-y and --ring that ui/mascot-view.js sets. Pages choose only
+   the size, and --m-ring for the header's hold ring.
+
+   Power: anything that runs for long is a transform on the .mascot element
+   itself, which the compositor animates without repainting the drawing.
+   Animations inside the SVG repaint it on every frame, so they are kept to
+   short reactions and a mood that lasts seconds, never a steady state. */
+
+.mascot {
+  --gaze-x: 0;
+  --gaze-y: 0;
+  --ring: 0;
+  transform-origin: 50% 88%;
+}
+
+.mascot svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+}
+
+/* Each mood's extra parts stay hidden until that mood shows them. */
+.mascot .m-alt {
+  display: none;
+}
+
+/* ------------------------------------------------------------ the face */
+
+#m-face {
+  transform: translate(calc(var(--gaze-x) * 0.75px), calc(var(--gaze-y) * 0.6px));
+  transition: transform 450ms cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+/* The eyes turn a little further than the face: a head turning. */
+#m-eyes {
+  transform: translate(calc(var(--gaze-x) * 0.45px), calc(var(--gaze-y) * 0.35px));
+  transition: transform 450ms cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.m-look {
+  transition: transform 300ms ease;
+}
+
+/* Blinks are timed by mascot-view.js, so nothing ticks between them. */
+.m-open {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: scale(var(--eye, 1), calc(var(--eye, 1) * var(--blink, 1)));
+  transition: transform 90ms ease-in-out;
+}
+
+.mascot[data-blink] {
+  --blink: 0.1;
+}
+
+.m-happy,
+.m-closed,
+.m-brow,
+#m-mouth path {
+  fill: none;
+  stroke: #2b1638;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.m-happy {
+  stroke-width: 1.35;
+}
+
+.m-closed {
+  stroke-width: 1.2;
+}
+
+.m-brow {
+  stroke-width: 0.88;
+}
+
+#m-mouth path {
+  stroke-width: 1.05;
+}
+
+#m-mouth .m-grin path,
+#m-mouth .m-o {
+  fill: #2b1638;
+  stroke: none;
+}
+
+#m-ring {
+  fill: none;
+  stroke: var(--m-ring, transparent);
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-dasharray: calc(var(--ring) * 100) 100;
+  transform: rotate(-90deg);
+  transform-origin: 16px 16.3px;
+  transition: stroke-dasharray 80ms linear;
+}
+
+/* ------------------------------------------------------------ moods */
+
+/* Ready, and the moods that only change the face: the default face is open
+   eyes and a smile, breathing. */
+.mascot {
+  animation: jelly-breathe 3.6s ease-in-out infinite;
+}
+
+/* A hand in view: eyes a little wider. */
+.mascot[data-mood='watching'] {
+  --eye: 1.1;
+}
+
+.mascot:is([data-mood='watching'], [data-mood='off']) .m-smile {
+  display: none;
+}
+
+.mascot:is([data-mood='watching'], [data-mood='off']) .m-small {
+  display: inline;
+}
+
+/* Starting: looks up, thinking, with a twinkle. */
+.mascot[data-mood='learning'] .m-look {
+  transform: translateY(-0.9px);
+}
+
+.mascot[data-mood='learning'] .m-smile {
+  display: none;
+}
+
+.mascot[data-mood='learning'] :is(.m-o, .m-spark) {
+  display: inline;
+}
+
+.mascot[data-mood='learning'] .m-spark path {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: jelly-twinkle 1.6s ease-in-out infinite;
+}
+
+.mascot[data-mood='learning'] .m-spark path + path {
+  animation-delay: 0.8s;
+}
+
+/* A gesture worked: happy eyes, a grin and a bounce. Armed is the same with a
+   wink and an OK sign. */
+.mascot:is([data-mood='nod'], [data-mood='hello']) .m-open,
+.mascot[data-mood='armed'] #m-eye-r .m-open,
+.mascot:is([data-mood='nod'], [data-mood='armed'], [data-mood='hello']) .m-smile {
+  display: none;
+}
+
+.mascot:is([data-mood='nod'], [data-mood='hello']) .m-happy,
+.mascot[data-mood='armed'] #m-eye-r .m-happy,
+.mascot:is([data-mood='nod'], [data-mood='armed'], [data-mood='hello']) .m-grin,
+.mascot[data-mood='armed'] .m-hand-ok,
+.mascot[data-mood='hello'] .m-hand-wave {
+  display: inline;
+}
+
+.mascot:is([data-mood='nod'], [data-mood='armed']) {
+  animation: jelly-bounce 820ms cubic-bezier(0.3, 0.7, 0.3, 1);
+}
+
+/* Hello, at login and wake: a hop and a wave. */
+.mascot[data-mood='hello'] {
+  animation: jelly-bounce 820ms cubic-bezier(0.3, 0.7, 0.3, 1) 2;
+}
+
+.mascot[data-mood='hello'] .m-waving {
+  transform-box: view-box;
+  transform-origin: 26.4px 14px;
+  animation: jelly-wave 1.1s ease-in-out 3;
+}
+
+/* Refused: brows up, a shrug and a tilt. */
+.mascot[data-mood='shrug'] :is(.m-smile) {
+  display: none;
+}
+
+.mascot[data-mood='shrug'] :is(.m-raised, .m-flat, .m-hand-shrug) {
+  display: inline;
+}
+
+.mascot[data-mood='shrug'] {
+  animation: jelly-tilt 900ms ease-in-out;
+}
+
+/* Something needs you: worried, a bead of sweat, a shake. */
+.mascot[data-mood='problem'] .m-smile {
+  display: none;
+}
+
+.mascot[data-mood='problem'] :is(.m-worried, .m-wavy, .m-sweat) {
+  display: inline;
+}
+
+.mascot[data-mood='problem'] {
+  animation: jelly-shake 560ms ease-in-out 2;
+}
+
+.mascot[data-mood='problem'] .m-sweat {
+  animation: jelly-sweat 1.8s ease-in 2 forwards;
+}
+
+/* Disarmed: asleep, breathing slowly. */
+.mascot[data-mood='asleep'] :is(.m-open, .m-smile) {
+  display: none;
+}
+
+.mascot[data-mood='asleep'] :is(.m-closed, .m-z) {
+  display: inline;
+}
+
+.mascot[data-mood='asleep'] {
+  animation: jelly-breathe-deep 5s ease-in-out infinite;
+}
+
+.mascot[data-mood='asleep'] .m-z path {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: jelly-z 3s ease-in-out 2;
+}
+
+.mascot[data-mood='asleep'] .m-z path + path {
+  animation-delay: 1.5s;
+}
+
+/* Camera off: it covers its eyes. It isn't looking. It doesn't breathe
+   either: the orb can sit like this all day, and a still picture costs
+   nothing to show. */
+.mascot[data-mood='off'] .m-hand-cover {
+  display: inline;
+}
+
+.mascot[data-mood='off'] {
+  animation: none;
+}
+
+.mascot[data-mood='off'] .m-open {
+  display: none;
+}
+
+.mascot:is([data-mood='off'], [data-mood='asleep']) svg {
+  filter: saturate(0.72) brightness(0.98);
+}
+
+/* Looking away, and measuring: a level mouth. */
+.mascot:is([data-mood='away'], [data-mood='still']) .m-smile {
+  display: none;
+}
+
+.mascot:is([data-mood='away'], [data-mood='still']) .m-flat {
+  display: inline;
+}
+
+/* During the check-up nothing moves, so the face can never cue a trial. */
+.mascot[data-mood='still'] *,
+.mascot[data-mood='still'] {
+  animation: none !important;
+  transition: none !important;
+}
+
+/* ------------------------------------------------------------ motion */
+
+@keyframes jelly-breathe {
+  50% {
+    transform: scale(1.022, 0.976);
+  }
+}
+
+@keyframes jelly-breathe-deep {
+  50% {
+    transform: scale(1.04, 0.958);
+  }
+}
+
+@keyframes jelly-bounce {
+  16% {
+    transform: scale(1.13, 0.86);
+  }
+
+  38% {
+    transform: translateY(-7%) scale(0.93, 1.09);
+  }
+
+  60% {
+    transform: scale(1.04, 0.96);
+  }
+
+  78% {
+    transform: translateY(-1%) scale(0.99, 1.01);
+  }
+}
+
+@keyframes jelly-tilt {
+  25% {
+    transform: rotate(-6deg);
+  }
+
+  55% {
+    transform: rotate(5deg);
+  }
+
+  80% {
+    transform: rotate(-2deg);
+  }
+}
+
+@keyframes jelly-shake {
+  20% {
+    transform: translateX(-2.2%);
+  }
+
+  40% {
+    transform: translateX(2.2%);
+  }
+
+  60% {
+    transform: translateX(-1.4%);
+  }
+
+  80% {
+    transform: translateX(1%);
+  }
+}
+
+@keyframes jelly-wave {
+  0%,
+  100% {
+    transform: rotate(-12deg);
+  }
+
+  50% {
+    transform: rotate(16deg);
+  }
+}
+
+@keyframes jelly-twinkle {
+  0%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+
+  50% {
+    transform: scale(1.1) rotate(45deg);
+    opacity: 1;
+  }
+}
+
+@keyframes jelly-sweat {
+  0% {
+    transform: translateY(-0.6px);
+    opacity: 0;
+  }
+
+  20% {
+    opacity: 1;
+  }
+
+  100% {
+    transform: translateY(1.2px);
+    opacity: 1;
+  }
+}
+
+@keyframes jelly-z {
+  0% {
+    opacity: 0;
+    transform: translate(-1px, 1.5px) scale(0.7);
+  }
+
+  40% {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .mascot,
+  .mascot * {
+    animation: none !important;
+  }
+}

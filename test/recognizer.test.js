@@ -366,23 +366,73 @@ test('holdMs can set every taught gesture, or one by name', () => {
   assert.equal(one.holdFor('fist'), 180, 'built-ins are unaffected');
 });
 
-test('a point fires after its own longer hold', () => {
-  // People point while talking, and a hand closing into a pinch passes
-  // through a point, so it waits longer than the other poses.
-  assert.deepEqual(run(new Recognizer(), hold({ pose: 'point', ms: 250 })), []);
-  assert.deepEqual(run(new Recognizer(), hold({ pose: 'point', ms: 450 })), ['point']);
+test('the OK sign fires after its own longer hold', () => {
+  // It arms and disarms, so a hand passing through the shape must not flip it.
+  assert.deepEqual(run(new Recognizer(), hold({ pose: 'ok_sign', ms: 350 })), []);
+  assert.deepEqual(run(new Recognizer(), hold({ pose: 'ok_sign', ms: 650 })), ['ok_sign']);
+});
+
+test('shh fires after its hold, and only while the mouth is known', () => {
+  const pts = buildHand({ pose: 'point' });
+  // On the index finger's top section: the lips under a "shh".
+  const mouth = { x: (pts[6].x + pts[8].x) / 2, y: (pts[6].y + pts[8].y) / 2 };
+
+  const withFace = new Recognizer();
+  withFace.setMouth(mouth);
+  assert.deepEqual(run(withFace, hold({ pose: 'point', ms: 300 })), []);
+  withFace.reset();
+  assert.deepEqual(run(withFace, hold({ pose: 'point', ms: 500 })), ['shh']);
+
+  const noFace = new Recognizer();
+  noFace.setMouth(null);
+  assert.deepEqual(run(noFace, hold({ pose: 'point', ms: 500 })), [], 'no face, no shh');
+});
+
+test('a forgiven gesture needn\'t wait out its cooldown, but must still be let go', () => {
+  const r = new Recognizer();
+  const fired = run(r, hold({ pose: 'pinch', ms: 300 }));
+  assert.deepEqual(fired, ['pinch']);
+  r.forgive('pinch');
+  // Still held: no repeat, or a refused pinch would refuse on every frame.
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 300, startT: 1400 })), []);
+  // Let go for longer than a flicker (RELEASE_MS), and pinch again at once,
+  // well inside the 1.2 s cooldown.
+  run(r, hold({ pose: 'open_palm', ms: 200, startT: 1750 }));
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 300, startT: 2000 })), ['pinch']);
+});
+
+test('a pose flickering out for a frame or two is still held, not made twice', () => {
+  const r = new Recognizer();
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 300 })), ['pinch']);
+  // No cooldown in the way: only the release rule can stop a second fire.
+  r.forgive('pinch');
+  // 100 ms of something else, then the pinch again: flicker, not a release.
+  run(r, hold({ pose: 'open_palm', ms: 100, startT: 1317 }));
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 1500, startT: 1434 })), []);
+});
+
+test('a real change of pose still times its hold from its own first frame', () => {
+  const r = new Recognizer();
+  run(r, hold({ pose: 'open_palm', ms: 300 }));
+  // A fist from 1317 ms fires once its 180 ms hold is up, not 150 ms later.
+  const fired = [];
+  for (const { pts, t } of hold({ pose: 'fist', ms: 400, startT: 1317 })) {
+    if (r.update(pts, t).gesture) fired.push(t);
+  }
+  assert.equal(fired.length, 1);
+  assert.ok(fired[0] <= 1317 + 180 + 50, `fired at ${fired[0]} ms`);
 });
 
 test('a moving hand still reports its shape, though it fires nothing', () => {
-  // A window carried to another screen follows the shape, not the gated pose:
-  // turning your head moves your hand, and that must not read as letting go.
+  // "Close your hand" watches the shape, not the gated pose: the hand moves a
+  // little as it closes, and the open-then-fist change must still be seen.
   const r = new Recognizer();
-  const views = motionStream({ pose: 'point', dx: RIGHTWARD }).map(({ pts, t }) => r.update(pts, t));
+  const views = motionStream({ pose: 'pinch', dx: RIGHTWARD }).map(({ pts, t }) => r.update(pts, t));
   const moving = views.filter((v) => v.velocity > r.tuning.stillnessMaxVelocity);
   assert.ok(moving.length > 0, 'the stream should move fast enough to gate poses');
   for (const v of moving) {
     assert.equal(v.pose, null);
-    assert.equal(v.shape, 'point');
+    assert.equal(v.shape, 'pinch');
   }
   assert.deepEqual(views.filter((v) => v.gesture), []);
 });

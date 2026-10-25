@@ -116,9 +116,9 @@ function resolve({ modifiers, key }) {
  *               of four configurations and the `mmf` layout moves the wrong way.
  *
  * Kept selectable because all three are load-bearing on undocumented behaviour
- * and the ranking could invert on the next macOS.
+ * and the ranking could invert on the next macOS. The list, and the check that
+ * config.json names one of them, are in config.js (SPACE_STRATEGIES).
  */
-export const SPACE_STRATEGIES = ['osascript', 'direct', 'dockswipe'];
 
 export async function create({
   keysendSource = 'hid',

@@ -20,9 +20,18 @@
 // with "ModuleFactory not set." when the bundle is loaded as an ES module in a
 // worker. importScripts of the UMD build works, and exposes a `Vision` global.
 
+importScripts('./worker-lib.js');
+const { shouldDetect, lumaStats, pickPoints } = self.GestureWorkerLib;
+
 let landmarker = null;
 let faceLandmarker = null;
 let running = false;
+
+// Set by the page: `full` runs every frame (calibration, the check-up, teaching,
+// the Lab), `luma` measures brightness (only covering the lens needs it).
+let options = { full: false, luma: false };
+// Which face points the page reads (FACE in screens.js); only those are sent.
+let faceIndices = [];
 
 // Head tracking runs on every other frame. A head turns far more slowly than a
 // hand moves, so half the rate costs nothing you could notice — and the face
@@ -31,6 +40,22 @@ const FACE_EVERY = 2;
 
 function post(type, payload = {}) {
   self.postMessage({ type, ...payload });
+}
+
+// "Cover the camera" needs only how bright the frame is and how much that
+// varies, so that is all that leaves: two numbers from a 16×9 thumbnail, never
+// pixels. Only made while covering the lens is bound or measured: shrinking a
+// whole frame every frame is not free.
+let thumb = null;
+function frameLuma(frame) {
+  if (!options.luma) return null;
+  try {
+    thumb ??= new OffscreenCanvas(16, 9).getContext('2d', { willReadFrequently: true });
+    thumb.drawImage(frame, 0, 0, 16, 9);
+    return lumaStats(thumb.getImageData(0, 0, 16, 9).data);
+  } catch {
+    return null;
+  }
 }
 
 /** Create a MediaPipe task, preferring the GPU and falling back to the CPU. */
@@ -74,6 +99,8 @@ async function loop(readable) {
   const reader = readable.getReader();
   let lastTs = 0;
   let frameIndex = 0;
+  let lastHandAt = -Infinity;
+  let lastRunAt = -Infinity;
 
   while (running) {
     const { value: frame, done } = await reader.read();
@@ -84,6 +111,11 @@ async function loop(readable) {
     }
 
     try {
+      // With nobody gesturing, most frames are let go unread: see shouldDetect().
+      const now = performance.now();
+      if (!shouldDetect({ now, lastHandAt, lastRunAt, full: options.full })) continue;
+      lastRunAt = now;
+
       // detectForVideo throws INVALID_ARGUMENT if the timestamp doesn't strictly
       // increase. performance.now() is monotonic; the max() guards against two
       // frames landing inside the same millisecond.
@@ -95,17 +127,20 @@ async function loop(readable) {
       lastTs = ts;
 
       const result = landmarker.detectForVideo(frame, ts);
+      const landmarks = result.landmarks?.[0] ?? null;
+      if (landmarks) lastHandAt = now;
       const payload = {
-        landmarks: result.landmarks?.[0] ?? null,
+        landmarks,
         width: frame.displayWidth,
         height: frame.displayHeight,
+        luma: frameLuma(frame),
       };
 
       // `face` is present only on frames where the face model ran: absent means
       // "no new reading", null means "looked, and there is no face".
       frameIndex += 1;
       if (faceLandmarker && frameIndex % FACE_EVERY === 0) {
-        payload.face = faceLandmarker.detectForVideo(frame, ts).faceLandmarks?.[0] ?? null;
+        payload.face = pickPoints(faceLandmarker.detectForVideo(frame, ts).faceLandmarks?.[0] ?? null, faceIndices);
       }
 
       post('landmarks', payload);
@@ -113,6 +148,7 @@ async function loop(readable) {
       post('error', { message: err.message, fatal: false });
     } finally {
       // Frames are backed by real buffers; not closing them stalls the pipeline.
+      // That includes the ones skipped unread.
       frame.close();
     }
   }
@@ -129,9 +165,16 @@ self.onmessage = async (event) => {
     return;
   }
 
+  if (type === 'options') {
+    options = { ...options, ...event.data.options };
+    return;
+  }
+
   if (type !== 'start') return;
 
   const { readable, wasmUrl, modelUrl, faceModelUrl, bundleUrl } = event.data;
+  options = { ...options, ...event.data.options };
+  faceIndices = event.data.faceIndices ?? [];
 
   try {
     importScripts(bundleUrl);

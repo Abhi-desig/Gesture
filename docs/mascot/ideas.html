@@ -1,0 +1,361 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot: 15 ideas (drafts)</title>
+<style>
+  body { margin: 0; padding: 20px; background: #f4f3f1; font: 13px/1.4 -apple-system, BlinkMacSystemFont, sans-serif; color: #17161c; }
+  .row { display: grid; grid-template-columns: 120px repeat(3, 150px); gap: 10px; align-items: center; margin-bottom: 10px; }
+  .row b { font-size: 14px; }
+  .cell { width: 150px; height: 150px; border-radius: 14px; display: grid; place-items: center;
+    background: radial-gradient(120% 120% at 20% 0%, #3b2f7a 0%, #1c1838 55%, #0f0d1f 100%); }
+  .cell.small { width: 150px; }
+  .tiny { display: flex; gap: 6px; align-items: center; }
+  .island { height: 30px; min-width: 36px; padding: 0 4px; border-radius: 15px; display: grid; place-items: center;
+    background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.12)); border: 1px solid rgba(255,255,255,.5); }
+</style>
+</head>
+<body>
+<div id="out"></div>
+<script>
+let uid = 0;
+const U = () => `g${++uid}`;
+const shadowF = (id, sd = 2.2) => `<filter id="${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="${sd}"/></filter>`;
+const ground = (id, rx = 24, c = '#000', o = .35) => `<ellipse cx="50" cy="92" rx="${rx}" ry="3.2" fill="${c}" opacity="${o}" filter="url(#${id})"/>`;
+
+const HAND = 'M38 88 C33 88 29 84 29 79 L29 62 C29 60 27 58 25 56 L17 47 C14 44 14 40 17 38 C20 36 23 37 25 40 L31 47 L31 25 C31 21 34 19 37 19 C40 19 42 21 42 25 L42 44 L43 44 L43 17 C43 13 46 11 49 11 C52 11 55 13 55 17 L55 44 L56 44 L56 21 C56 17 59 15 62 15 C65 15 68 17 68 21 L68 46 L69 46 L69 30 C69 27 71 25 74 25 C77 25 79 27 79 30 L79 64 C79 78 70 88 58 88 Z';
+
+const C = {};
+
+// 1 Liquid: iridescent liquid chrome; a drop that melts into your gesture.
+C.liquid = (st) => {
+  const id = U();
+  const drop = 'M50 12 C53 20 74 40 74 58 C74 74 63 86 50 86 C37 86 26 74 26 58 C26 40 47 20 50 12 Z';
+  const puddle = 'M12 79 C12 72 30 68 50 68 C70 68 88 72 88 79 C88 85 70 87 50 87 C30 87 12 85 12 79 Z';
+  const d = { rest: drop, gesture: HAND, off: puddle }[st];
+  const hl = { rest: '<path d="M37 46 C39 36 44 28 48 22" stroke="#fff" stroke-width="3.2" stroke-linecap="round" fill="none" opacity=".85"/>',
+    gesture: '<path d="M33 30 V44 M46 22 V40 M59 26 V40 M72 34 V44" stroke="#fff" stroke-width="2.4" stroke-linecap="round" opacity=".7"/>',
+    off: '<path d="M24 75 C34 71 48 70 60 71" stroke="#fff" stroke-width="2.4" stroke-linecap="round" fill="none" opacity=".75"/>' }[st];
+  return `<defs>
+    <linearGradient id="${id}a" x1="15%" y1="5%" x2="85%" y2="95%"><stop offset="0" stop-color="#fdfbff"/><stop offset=".3" stop-color="#cdbbff"/><stop offset=".55" stop-color="#a5ecf4"/><stop offset=".78" stop-color="#ffc6e5"/><stop offset="1" stop-color="#8d7cf0"/></linearGradient>
+    <radialGradient id="${id}b" cx="32%" cy="24%" r="50%"><stop offset="0" stop-color="#fff" stop-opacity=".8"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="${id}c" cx="70%" cy="90%" r="60%"><stop offset="0" stop-color="#5b3fd9" stop-opacity=".45"/><stop offset="1" stop-color="#5b3fd9" stop-opacity="0"/></radialGradient>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 26, '#8d7cf0', .45)}
+    <path d="${d}" fill="url(#${id}a)"/><path d="${d}" fill="url(#${id}c)"/><path d="${d}" fill="url(#${id}b)"/>
+    ${hl}`;
+};
+
+// 2 Ribbon: one glossy ribbon that ties itself into each gesture.
+C.ribbon = (st) => {
+  const id = U();
+  const d = {
+    rest: 'M28 52 C28 38 42 38 50 52 C58 66 72 66 72 52 C72 38 58 38 50 52 C42 66 28 66 28 52 Z',
+    gesture: 'M62 18 C60 30 56 42 50 50 C44 58 32 62 28 54 C24 46 34 38 42 42 C50 46 50 58 42 64 C36 68 30 70 24 76',
+    off: 'M12 72 C22 64 30 80 40 72 C50 64 58 80 68 72 C76 66 82 70 88 72',
+  }[st];
+  return `<defs>
+    <linearGradient id="${id}a" gradientUnits="userSpaceOnUse" x1="14" y1="24" x2="86" y2="80"><stop offset="0" stop-color="#ffb38a"/><stop offset=".35" stop-color="#ff6fa8"/><stop offset=".7" stop-color="#9a6bff"/><stop offset="1" stop-color="#4fb6ff"/></linearGradient>
+    ${shadowF(id + 's', 2.6)}</defs>
+    <path d="${d}" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="10" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 5)" filter="url(#${id}s)"/>
+    <path d="${d}" fill="none" stroke="url(#${id}a)" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="${d}" fill="none" stroke="#fff" stroke-opacity=".55" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" transform="translate(-1.2 -2)"/>`;
+};
+
+// 3 Origami: a folded paper crane that refolds into each reaction.
+C.origami = (st) => {
+  const id = U();
+  const T = { a: `url(#${id}a)`, b: `url(#${id}b)`, c: `url(#${id}c)`, d: `url(#${id}d)` };
+  const poly = (pts, f) => `<polygon points="${pts}" fill="${f}" stroke="#fff" stroke-opacity=".25" stroke-width=".5" stroke-linejoin="round"/>`;
+  const rest = [
+    ['70,62 94,36 78,64', T.d],                 // tail
+    ['36,62 56,52 76,62 54,70', T.b],           // body
+    ['34,62 54,70 46,75', T.d],                 // underside fold
+    ['48,56 74,20 62,58', T.a],                 // near wing, raised
+    ['52,57 62,58 57,63', T.c],                 // wing root, in shade
+    ['40,60 22,26 27,27 45,58', T.c],           // neck
+    ['22,26 14,36 24,30', T.d],                 // head, folded down
+  ];
+  const gesture = [
+    ['70,60 96,32 78,62', T.d],
+    ['36,60 56,50 76,60 54,68', T.b],
+    ['34,60 54,68 46,73', T.d],
+    ['48,54 34,10 44,56', T.c],                 // far wing, now up as well
+    ['48,54 78,8 62,56', T.a],                  // near wing, high
+    ['40,58 18,24 23,25 45,56', T.c],
+    ['18,24 10,34 20,28', T.d],
+  ];
+  const off = [['26,72 50,62 74,72 50,82', T.b], ['50,62 74,72 50,72', T.c], ['26,72 50,72 50,82', T.a], ['50,72 74,72 50,82', T.d]];
+  const fold = { rest, gesture, off }[st];
+  return `<defs>
+    <linearGradient id="${id}a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffe1cc"/><stop offset="1" stop-color="#ff9e8c"/></linearGradient>
+    <linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9e8c"/><stop offset="1" stop-color="#e8527e"/></linearGradient>
+    <linearGradient id="${id}c" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f6c2ff"/><stop offset="1" stop-color="#9a6bff"/></linearGradient>
+    <linearGradient id="${id}d" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#b98cff"/><stop offset="1" stop-color="#5b3fd9"/></linearGradient>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 26, '#000', .35)}
+    ${fold.map(([p, f]) => poly(p, f)).join('')}`;
+};
+
+// 4 Firefly: a light that paints your gesture in the air.
+C.firefly = (st) => {
+  const id = U();
+  const trail = { rest: 'M24 66 C30 52 44 50 50 56 C56 62 60 50 60 40', gesture: 'M22 54 L40 70 L76 30', off: '' }[st];
+  const at = { rest: [60, 40], gesture: [76, 30], off: [50, 78] }[st];
+  const glow = st === 'off' ? .25 : 1;
+  return `<defs>
+    <linearGradient id="${id}t" gradientUnits="userSpaceOnUse" x1="20" y1="70" x2="${at[0]}" y2="${at[1]}"><stop offset="0" stop-color="#ffe66b" stop-opacity="0"/><stop offset=".6" stop-color="#ffd34f" stop-opacity=".7"/><stop offset="1" stop-color="#fff6c9"/></linearGradient>
+    <radialGradient id="${id}g"><stop offset="0" stop-color="#fffbe6"/><stop offset=".35" stop-color="#ffe46b"/><stop offset="1" stop-color="#ffb627" stop-opacity="0"/></radialGradient>
+    ${shadowF(id + 'b', 2.4)}</defs>
+    ${trail ? `<path d="${trail}" fill="none" stroke="url(#${id}t)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round" filter="url(#${id}b)"/>
+      <path d="${trail}" fill="none" stroke="url(#${id}t)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>` : ''}
+    <circle cx="${at[0]}" cy="${at[1]}" r="16" fill="url(#${id}g)" opacity="${glow}"/>
+    <ellipse cx="${at[0] - 4}" cy="${at[1] - 5}" rx="5" ry="2.6" fill="#fff" opacity="${.55 * glow}" transform="rotate(-30 ${at[0] - 4} ${at[1] - 5})"/>
+    <ellipse cx="${at[0] + 4}" cy="${at[1] - 5}" rx="5" ry="2.6" fill="#fff" opacity="${.55 * glow}" transform="rotate(30 ${at[0] + 4} ${at[1] - 5})"/>
+    <circle cx="${at[0]}" cy="${at[1]}" r="3.2" fill="#fffdf2" opacity="${glow}"/>`;
+};
+
+// 5 Glyph: a living lowercase g, Gesture's initial, that writes your gesture.
+C.glyph = (st) => {
+  const id = U();
+  const g = {
+    rest: 'M64 34 C60 26 52 24 46 26 C36 29 32 40 36 49 C40 58 52 60 60 54 C63 52 64 48 64 44 M64 30 V66 C64 80 50 86 38 80',
+    gesture: 'M64 34 C60 26 52 24 46 26 C36 29 32 40 36 49 C40 58 52 60 60 54 C63 52 64 48 64 44 M64 30 V64 C64 82 40 90 34 76 C30 66 44 62 48 72',
+    off: 'M64 34 C60 26 52 24 46 26 C36 29 32 40 36 49 C40 58 52 60 60 54 C63 52 64 48 64 44 M64 30 V66 C64 80 50 86 38 80',
+  }[st];
+  return `<defs>
+    <linearGradient id="${id}a" gradientUnits="userSpaceOnUse" x1="30" y1="22" x2="66" y2="86"><stop offset="0" stop-color="#8f7bff"/><stop offset=".55" stop-color="#ff6fae"/><stop offset="1" stop-color="#ffb35c"/></linearGradient>
+    ${shadowF(id + 's', 2.4)}</defs>
+    <g ${st === 'off' ? 'transform="rotate(-90 50 56) translate(0 8)" opacity=".55"' : ''}>
+      <path d="${g}" fill="none" stroke="#000" stroke-opacity=".35" stroke-width="11" stroke-linecap="round" stroke-linejoin="round" transform="translate(0 4)" filter="url(#${id}s)"/>
+      <path d="${g}" fill="none" stroke="url(#${id}a)" stroke-width="11" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="${g}" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round" transform="translate(-1.4 -1.8)"/>
+    </g>`;
+};
+
+// 6 Fingertips: your hand as five glowing beads that form each gesture.
+C.fingertips = (st) => {
+  const id = U();
+  const hues = [['#ffd09a', '#ff7a3d'], ['#ffb2cf', '#ff4f8b'], ['#d9c2ff', '#8a5cff'], ['#b9dcff', '#4b8bff'], ['#b8f6e6', '#25b896']];
+  const pos = {
+    rest: [[22, 64], [35, 36], [50, 28], [65, 33], [78, 46]],
+    gesture: [[39, 60], [47, 54], [57, 28], [69, 33], [79, 45]],
+    off: [[22, 80], [36, 80], [50, 80], [64, 80], [78, 80]],
+  }[st];
+  const dim = st === 'off' ? .5 : 1;
+  return `<defs>${hues.map(([a, b], i) => `<radialGradient id="${id}h${i}" cx="35%" cy="30%" r="75%"><stop offset="0" stop-color="${a}"/><stop offset="1" stop-color="${b}"/></radialGradient>`).join('')}
+    ${shadowF(id + 'g', 3)}</defs>
+    ${pos.map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="9" fill="${hues[i][1]}" opacity="${.55 * dim}" filter="url(#${id}g)"/>`).join('')}
+    ${pos.map(([x, y], i) => `<circle cx="${x}" cy="${y}" r="7" fill="url(#${id}h${i})" opacity="${dim}"/><circle cx="${x - 2.2}" cy="${y - 2.4}" r="1.6" fill="#fff" opacity="${.85 * dim}"/>`).join('')}`;
+};
+
+// 7 Glass glove: the invisible hand, as frosted glass.
+C.glove = (st) => {
+  const id = U();
+  const t = { rest: '', gesture: 'rotate(-14 50 60)', off: 'rotate(-90 50 60) translate(-6 0)' }[st];
+  return `<defs>
+    <linearGradient id="${id}e" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".95"/><stop offset=".5" stop-color="#fff" stop-opacity=".25"/><stop offset="1" stop-color="#b7a8ff" stop-opacity=".8"/></linearGradient>
+    <linearGradient id="${id}f" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".38"/><stop offset="1" stop-color="#9fd8ff" stop-opacity=".12"/></linearGradient>
+    ${shadowF(id + 's', 2.6)}</defs>
+    ${ground(id + 's', 24, '#7d6bff', .35)}
+    <g transform="${t}" opacity="${st === 'off' ? .6 : 1}">
+      <path d="${HAND}" fill="url(#${id}f)" stroke="url(#${id}e)" stroke-width="1.8" stroke-linejoin="round"/>
+      <path d="M33 30 V46 M46 22 V42 M59 26 V42 M72 34 V46" stroke="#fff" stroke-opacity=".6" stroke-width="2" stroke-linecap="round"/>
+      <path d="M33 64 C36 74 44 80 54 80" stroke="#fff" stroke-opacity=".35" stroke-width="3" fill="none" stroke-linecap="round"/>
+    </g>
+    ${st === 'gesture' ? '<path d="M84 26 C88 32 88 40 84 46 M90 22 C95 30 95 42 90 50" stroke="#fff" stroke-opacity=".55" stroke-width="2" fill="none" stroke-linecap="round"/>' : ''}`;
+};
+
+// 8 Shadow play: a lantern; your hand throws shadow animals on it.
+C.shadow = (st) => {
+  const id = U();
+  const rabbit = `<path d="M40 50 C33 36 32 20 36.5 17 C41 15 45 29 46 47 Z M51 46 C53 30 57.5 17 61.5 18 C66 20 61 34 56 49 Z"/>
+    <ellipse cx="48" cy="60" rx="15" ry="12.5"/><circle cx="61" cy="62" r="6.5"/>
+    <path d="M35 64 C33 76 42 84 54 82 C60 81 62 76 60 72 Z"/>`;
+  const bird = `<path d="M24 62 C34 54 44 52 52 54 L64 44 C68 40 74 40 76 44 C72 46 70 49 69 53 C75 53 80 56 78 60 C70 64 58 66 48 66 C40 66 31 66 24 62 Z"/>
+    <path d="M42 56 C44 42 52 31 64 26 C60 36 58 46 52 56 Z"/>`;
+  const eye = { rest: '<circle cx="55" cy="56" r="2" fill="#ffe9b8"/>', gesture: '<circle cx="70" cy="47.5" r="1.6" fill="#ffe9b8"/>', off: '' }[st];
+  const lamp = st === 'off' ? .35 : 1;
+  return `<defs>
+    <radialGradient id="${id}l" cx="50%" cy="45%" r="55%"><stop offset="0" stop-color="#fff3d1"/><stop offset=".55" stop-color="#ffbf5e"/><stop offset="1" stop-color="#f0743a"/></radialGradient>
+    ${shadowF(id + 'h', 5)}${shadowF(id + 'k', .45)}</defs>
+    <circle cx="50" cy="52" r="40" fill="#ffb15e" opacity="${.35 * lamp}" filter="url(#${id}h)"/>
+    <circle cx="50" cy="52" r="36" fill="url(#${id}l)" opacity="${lamp}"/>
+    ${st === 'off' ? '' : `<g fill="#2b2140" opacity=".9" filter="url(#${id}k)">${st === 'rest' ? rabbit : bird}</g>${eye}`}`;
+};
+
+// 9 Mimosa: the sensitive plant, which folds its leaves when touched.
+C.mimosa = (st) => {
+  const id = U();
+  const branches = {
+    rest: [['M50 50 C42 46 34 42 24 40', -1], ['M50 44 C58 40 66 36 76 34', 1]],
+    gesture: [['M50 50 C42 44 36 38 30 32', -1], ['M50 44 C58 38 64 32 70 26', 1]],
+    off: [['M50 50 C44 54 38 60 33 68', -1], ['M50 46 C56 50 62 56 67 64', 1]],
+  }[st];
+  const folded = st !== 'rest';
+  const leaf = (x, y, ang) => folded
+    ? `<ellipse cx="${x}" cy="${y}" rx="3.4" ry="1.2" fill="url(#${id}g)" transform="rotate(${ang} ${x} ${y})"/>`
+    : `<ellipse cx="${x}" cy="${y}" rx="1.6" ry="4" fill="url(#${id}g)" transform="rotate(${ang} ${x} ${y})"/>`;
+  const along = (d, side) => {
+    // Sample a few points along a cubic: enough for leaflets.
+    const n = d.match(/[-\d.]+/g).map(Number);
+    const [x0, y0, x1, y1, x2, y2, x3, y3] = n;
+    const pts = [];
+    for (let k = 1; k <= 5; k++) {
+      const t = k / 6, u = 1 - t;
+      const x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+      const y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+      const ang = Math.atan2(y3 - y0, x3 - x0) * 180 / Math.PI;
+      pts.push(leaf(x, y - (folded ? 0 : 3.4), ang) + leaf(x, y + (folded ? 0 : 3.4), ang));
+    }
+    return pts.join('');
+  };
+  return `<defs>
+    <linearGradient id="${id}g" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="${st === 'off' ? '#9bc4a2' : '#a6f0b0'}"/><stop offset="1" stop-color="${st === 'off' ? '#4f7f62' : '#25a46b'}"/></linearGradient>
+    <linearGradient id="${id}p" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffb48a"/><stop offset="1" stop-color="#d9603b"/></linearGradient>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 20)}
+    <path d="M50 72 V36" stroke="#2f9a63" stroke-width="2.4" stroke-linecap="round"/>
+    ${branches.map(([d, side]) => `<path d="${d}" stroke="#2f9a63" stroke-width="1.6" fill="none" stroke-linecap="round"/>${along(d, side)}`).join('')}
+    <circle cx="50" cy="34" r="3.2" fill="#ff8fc8"/><circle cx="50" cy="34" r="1.4" fill="#ffd1ea"/>
+    <path d="M34 72 H66 L62 90 H38 Z" fill="url(#${id}p)"/><rect x="32" y="69" width="36" height="6" rx="3" fill="#ffc6a6"/>`;
+};
+
+// 10 Pointer: the mouse arrow Gesture frees you from, soft and alive.
+C.pointer = (st) => {
+  const id = U();
+  const arrow = 'M32 16 L32 76 L45 63 L55 84 L65 79 L55 59 L73 59 Z';
+  const t = { rest: 'rotate(-6 50 50)', gesture: 'translate(4 4) scale(.92)', off: 'rotate(-100 50 56) translate(-4 0)' }[st];
+  return `<defs>
+    <linearGradient id="${id}a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ffffff"/><stop offset="1" stop-color="#d5c9ff"/></linearGradient>
+    ${shadowF(id + 's', 2.4)}</defs>
+    <g transform="${t}" opacity="${st === 'off' ? .55 : 1}">
+      <path d="${arrow}" fill="#000" opacity=".4" transform="translate(3 5)" filter="url(#${id}s)"/>
+      <path d="${arrow}" fill="#6a5cf0" stroke="#6a5cf0" stroke-width="5" stroke-linejoin="round" transform="translate(2.4 2.4)"/>
+      <path d="${arrow}" fill="url(#${id}a)" stroke="url(#${id}a)" stroke-width="5" stroke-linejoin="round"/>
+      <path d="M35 24 V64" stroke="#fff" stroke-width="2" stroke-linecap="round" opacity=".9"/>
+    </g>
+    ${st === 'gesture' ? '<circle cx="33" cy="18" r="7" fill="none" stroke="#c9bdff" stroke-width="2"/><circle cx="33" cy="18" r="13" fill="none" stroke="#c9bdff" stroke-width="1.4" opacity=".55"/>' : ''}
+    ${st === 'off' ? '<text x="66" y="40" font-size="10" font-weight="700" fill="#c9bdff" opacity=".8">z</text><text x="74" y="31" font-size="7" font-weight="700" fill="#c9bdff" opacity=".6">z</text>' : ''}`;
+};
+
+// 11 Aperture: the camera's iris; it opens to watch and closes to rest.
+C.aperture = (st) => {
+  const id = U();
+  const open = { rest: 13, gesture: 5, off: 0.6 }[st];
+  const blades = [];
+  for (let i = 0; i < 6; i++) {
+    const a0 = (i * 60) * Math.PI / 180;
+    const a1 = ((i + 1) * 60) * Math.PI / 180;
+    const p = (r, a) => `${(50 + r * Math.cos(a)).toFixed(2)},${(50 + r * Math.sin(a)).toFixed(2)}`;
+    const pts = [p(open, a0), p(open, a1), p(40, a1 + 0.9), p(40, a0 + 0.35)].join(' ');
+    blades.push(`<polygon points="${pts}" fill="url(#${id}${i % 2 ? 'b' : 'a'})" stroke="#c9c0ff" stroke-opacity=".4" stroke-width=".6" stroke-linejoin="round"/>`);
+  }
+  return `<defs>
+    <radialGradient id="${id}r" cx="35%" cy="30%" r="80%"><stop offset="0" stop-color="#f4f2ff"/><stop offset=".6" stop-color="#9c97c4"/><stop offset="1" stop-color="#4c4770"/></radialGradient>
+    <linearGradient id="${id}a" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#8f7cff"/><stop offset="1" stop-color="#3f2fb8"/></linearGradient>
+    <linearGradient id="${id}b" x1="1" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6fa0ff"/><stop offset="1" stop-color="#2f4fc8"/></linearGradient>
+    <radialGradient id="${id}p"><stop offset="0" stop-color="#e9feff"/><stop offset=".45" stop-color="#6ff0ff"/><stop offset="1" stop-color="#2f6bff"/></radialGradient>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 26)}
+    <circle cx="50" cy="50" r="38" fill="url(#${id}r)"/>
+    <circle cx="50" cy="50" r="31.5" fill="#15122b"/>
+    <clipPath id="${id}lens"><circle cx="50" cy="50" r="31.5"/></clipPath>
+    <circle cx="50" cy="50" r="${Math.max(open, 1) + 2}" fill="url(#${id}p)" opacity="${st === 'off' ? 0 : 1}"/>
+    <g clip-path="url(#${id}lens)">${blades.join('')}</g>
+    <ellipse cx="38" cy="30" rx="10" ry="4" fill="#fff" opacity=".35" transform="rotate(-30 38 30)"/>`;
+};
+
+// 12 Prism: a glass prism; light bends toward the screen you face.
+C.prism = (st) => {
+  const id = U();
+  const on = st !== 'off';
+  const bright = st === 'gesture' ? 1 : .8;
+  const colors = ['#ff5f6d', '#ffb347', '#ffe66b', '#5be08f', '#4fb6ff', '#9a6bff'];
+  return `<defs>
+    <linearGradient id="${id}g" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#fff" stop-opacity=".75"/><stop offset=".55" stop-color="#d8ccff" stop-opacity=".35"/><stop offset="1" stop-color="#8f7cff" stop-opacity=".55"/></linearGradient>
+    ${shadowF(id + 'b', 1.6)}${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 24)}
+    ${on ? `<path d="M4 60 L38 50" stroke="#fff" stroke-width="3" stroke-linecap="round" opacity="${bright}" filter="url(#${id}b)"/><path d="M4 60 L38 50" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/>` : ''}
+    ${on ? colors.map((c, i) => `<path d="M62 52 L97 ${40 + i * 5}" stroke="${c}" stroke-width="3.6" stroke-linecap="round" opacity="${bright}" filter="url(#${id}b)"/>`).join('') : ''}
+    <polygon points="50,20 78,72 22,72" fill="url(#${id}g)" stroke="#fff" stroke-opacity=".8" stroke-width="1.4" stroke-linejoin="round"/>
+    <path d="M50 24 L30 68" stroke="#fff" stroke-opacity=".55" stroke-width="2" stroke-linecap="round"/>
+    ${st === 'gesture' ? '<path d="M82 22 L84 28 L90 30 L84 32 L82 38 L80 32 L74 30 L80 28 Z" fill="#fff"/>' : ''}`;
+};
+
+// 13 Bubble: thin-film glass; it reflects the screen you face.
+C.bubble = (st) => {
+  const id = U();
+  if (st === 'off') {
+    const drops = [];
+    for (let i = 0; i < 9; i++) {
+      const a = i / 9 * Math.PI * 2;
+      drops.push(`<circle cx="${50 + 28 * Math.cos(a)}" cy="${54 + 24 * Math.sin(a)}" r="${1.4 + (i % 3) * .6}" fill="url(#${id}d)"/>`);
+    }
+    return `<defs><radialGradient id="${id}d" cx="35%" cy="30%"><stop offset="0" stop-color="#fff"/><stop offset="1" stop-color="#9fd8ff"/></radialGradient></defs>
+      <ellipse cx="50" cy="54" rx="28" ry="24" fill="none" stroke="#c8b6ff" stroke-opacity=".25" stroke-dasharray="2 5"/>${drops.join('')}`;
+  }
+  const rx = st === 'gesture' ? 34 : 30;
+  const ry = st === 'gesture' ? 25 : 30;
+  return `<defs>
+    <radialGradient id="${id}f" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#fff" stop-opacity="0"/><stop offset=".72" stop-color="#fff" stop-opacity=".05"/><stop offset=".86" stop-color="#a8f0ff" stop-opacity=".4"/><stop offset=".94" stop-color="#ffb3e6" stop-opacity=".6"/><stop offset="1" stop-color="#b9a2ff" stop-opacity=".9"/></radialGradient>
+    <linearGradient id="${id}t" x1="0" y1="1" x2="1" y2="0"><stop offset="0" stop-color="#ff9fd9" stop-opacity=".35"/><stop offset=".5" stop-color="#9fffc8" stop-opacity=".25"/><stop offset="1" stop-color="#8fb8ff" stop-opacity=".35"/></linearGradient>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 20, '#8f7cff', .3)}
+    <ellipse cx="50" cy="50" rx="${rx}" ry="${ry}" fill="url(#${id}t)"/>
+    <ellipse cx="50" cy="50" rx="${rx}" ry="${ry}" fill="url(#${id}f)"/>
+    <rect x="34" y="30" width="13" height="9" rx="2" fill="#fff" opacity=".75" transform="rotate(-20 40 34)"/>
+    <circle cx="66" cy="66" r="2.4" fill="#fff" opacity=".7"/>
+    <circle cx="82" cy="24" r="6.5" fill="url(#${id}f)"/><circle cx="80" cy="22" r="1.4" fill="#fff" opacity=".8"/>`;
+};
+
+// 14 Gummy: a translucent jelly with a light inside that looks at your screen.
+C.gummy = (st) => {
+  const id = U();
+  const body = { rest: 'M30 30 H70 Q80 30 80 40 V76 Q80 86 70 86 H30 Q20 86 20 76 V40 Q20 30 30 30 Z',
+    gesture: 'M26 40 H74 Q86 40 86 50 V78 Q86 88 74 88 H26 Q14 88 14 78 V50 Q14 40 26 40 Z',
+    off: 'M30 34 H70 Q80 34 80 44 V78 Q80 88 70 88 H30 Q20 88 20 78 V44 Q20 34 30 34 Z' }[st];
+  const core = { rest: [58, 56, 1], gesture: [50, 64, 1.25], off: [50, 66, .35] }[st];
+  return `<defs>
+    <linearGradient id="${id}b" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#ff9fc6" stop-opacity=".95"/><stop offset="1" stop-color="#c2296f" stop-opacity=".95"/></linearGradient>
+    <radialGradient id="${id}c"><stop offset="0" stop-color="#fffbe0"/><stop offset=".4" stop-color="#ffd76b" stop-opacity=".9"/><stop offset="1" stop-color="#ff7aa8" stop-opacity="0"/></radialGradient>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 30, '#c2296f', .45)}
+    <path d="${body}" fill="url(#${id}b)" opacity="${st === 'off' ? .7 : 1}"/>
+    <circle cx="${core[0]}" cy="${core[1]}" r="${16 * core[2]}" fill="url(#${id}c)" opacity="${core[2] > .5 ? 1 : .5}"/>
+    <path d="M28 40 Q28 36 34 36 H52" stroke="#fff" stroke-width="3.2" stroke-linecap="round" fill="none" opacity=".75" transform="${st === 'gesture' ? 'translate(-4 8)' : st === 'off' ? 'translate(0 4)' : ''}"/>
+    <circle cx="70" cy="${st === 'gesture' ? 78 : 76}" r="1.8" fill="#fff" opacity=".5"/>`;
+};
+
+// 15 Orbit: a small planet; its ring becomes the OK.
+C.orbit = (st) => {
+  const id = U();
+  const tilt = { rest: -18, gesture: -72, off: -18 }[st];
+  const night = st === 'off';
+  return `<defs>
+    <radialGradient id="${id}p" cx="32%" cy="28%" r="80%"><stop offset="0" stop-color="${night ? '#4a3c86' : '#a8f0ff'}"/><stop offset=".5" stop-color="${night ? '#2a2160' : '#6a7cff'}"/><stop offset="1" stop-color="${night ? '#120d2c' : '#3b2a9c'}"/></radialGradient>
+    <linearGradient id="${id}r" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#fff" stop-opacity=".9"/><stop offset=".5" stop-color="#ffc6e5"/><stop offset="1" stop-color="#a58bff"/></linearGradient>
+    <clipPath id="${id}top"><rect x="0" y="0" width="100" height="50"/></clipPath>
+    <clipPath id="${id}bot"><rect x="0" y="50" width="100" height="50"/></clipPath>
+    ${shadowF(id + 's')}</defs>
+    ${ground(id + 's', 22)}
+    <g transform="rotate(${tilt} 50 50)" opacity="${night ? .45 : 1}"><ellipse cx="50" cy="50" rx="38" ry="10" fill="none" stroke="url(#${id}r)" stroke-width="3.6" clip-path="url(#${id}top)"/></g>
+    <circle cx="50" cy="50" r="22" fill="url(#${id}p)"/>
+    ${night ? '<path d="M62 32 A22 22 0 0 1 62 68 A26 26 0 0 0 62 32 Z" fill="#a8f0ff" opacity=".6"/>' : '<ellipse cx="42" cy="40" rx="7" ry="3.6" fill="#fff" opacity=".35" transform="rotate(-30 42 40)"/>'}
+    <g transform="rotate(${tilt} 50 50)" opacity="${night ? .45 : 1}"><ellipse cx="50" cy="50" rx="38" ry="10" fill="none" stroke="url(#${id}r)" stroke-width="3.6" clip-path="url(#${id}bot)"/></g>
+    <circle cx="${st === 'gesture' ? 20 : 84}" cy="${st === 'gesture' ? 26 : 28}" r="4.2" fill="#ff9fd0" opacity="${night ? .4 : 1}"/>
+    <circle cx="${st === 'gesture' ? 82 : 18}" cy="${st === 'gesture' ? 76 : 74}" r="3" fill="#7ff0d8" opacity="${night ? .4 : 1}"/>`;
+};
+
+// ---- end of art ----
+const svg = (fn, st, size) => `<svg width="${size}" height="${size}" viewBox="0 0 100 100" overflow="visible">${C[fn](st)}</svg>`;
+document.getElementById('out').innerHTML = Object.keys(C).map((k, i) => `
+  <div class="row"><b>${i + 1}. ${k}</b>
+    <div class="cell">${svg(k, 'rest', 120)}</div>
+    <div class="cell">${svg(k, 'gesture', 120)}</div>
+    <div class="cell"><div style="display:grid;gap:6px;justify-items:center">${svg(k, 'off', 90)}<div class="island">${svg(k, 'rest', 24)}</div></div></div>
+  </div>`).join('');
+</script>
+</body>
+</html>

@@ -30,10 +30,15 @@ const FACE_MODEL_URL =
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC = path.join(ROOT, 'public');
 
+// For the Lab's vanish effect: which pixels are you. Landscape, for 16:9 webcams.
+const SEGMENT_MODEL_URL =
+  'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/1/selfie_segmenter_landscape.tflite';
+
 /** @type {{url: string, dest: string, note?: string}[]} */
 const ASSETS = [
   { url: MODEL_URL, dest: 'models/hand_landmarker.task' },
   { url: FACE_MODEL_URL, dest: 'models/face_landmarker.task' },
+  { url: SEGMENT_MODEL_URL, dest: 'models/selfie_segmenter_landscape.tflite' },
 
   // Two builds of the same library, and both are needed: the page imports the
   // ESM one, while the worker has to importScripts the UMD one — the ESM build

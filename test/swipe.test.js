@@ -111,7 +111,7 @@ test('without the guard, the return stroke does undo the swipe', () => {
     new SwipeTracker({ rearmRequiresPoseBreak: false }),
     sequence(
       motionStream({ dx: RIGHTWARD, durationMs: 500, frames: 30 }),
-      motionStream({ dx: LEFTWARD, durationMs: 500, frames: 30, start: { x: 0.25, y: 0.6 } }),
+      motionStream({ dx: LEFTWARD, durationMs: 500, frames: 30, start: { x: 0.25, y: 0.75 } }),
     ),
   );
   assert.ok(fires.length >= 2, `expected the return stroke to fire too (got ${fires.length})`);
@@ -218,6 +218,122 @@ test('losing the hand clears the window and re-arms', () => {
 
   const fires = run(tracker, motionStream({ dx: RIGHTWARD, startT: 5000 }));
   assert.equal(fires.length, 1);
+});
+
+// ------------------------------------------------------ palm up / palm down
+
+// Image y runs down the frame: a hand moving up has a negative dy.
+const UP = -0.25;
+const DOWN = 0.25;
+
+/** Hold an open hand still, flick it, then hold it (or not) where it lands. */
+function flick({ dy, stillMs = 300, durationMs = 250, afterMs = 200, start = { x: 0.5, y: 0.6 } }) {
+  const parts = [];
+  if (stillMs > 0) parts.push(motionStream({ pose: 'open_palm', frames: Math.round(stillMs / 33), durationMs: stillMs, start }));
+  parts.push(motionStream({ pose: 'open_palm', frames: Math.max(3, Math.round(durationMs / 33)), durationMs, dy, start }));
+  if (afterMs > 0) {
+    parts.push(motionStream({ pose: 'open_palm', frames: Math.round(afterMs / 33), durationMs: afterMs, start: { x: start.x, y: start.y + dy } }));
+  }
+  return sequence(...parts);
+}
+
+test('a flick of a still, open hand scrolls up or down, once', () => {
+  const up = run(new SwipeTracker(), flick({ dy: UP }));
+  assert.deepEqual(up.map((f) => f.swipe), ['swipe_up']);
+  const down = run(new SwipeTracker(), flick({ dy: DOWN }));
+  assert.deepEqual(down.map((f) => f.swipe), ['swipe_down']);
+});
+
+// The two extra guards are off by default (up and down work exactly like a
+// side swipe) but still there to switch on if raising or lowering a hand
+// misfires.
+const GUARDED = { stillFirstMs: 200, confirmMs: 120 };
+
+test('by default up and down work like a side swipe, with no still moment needed', () => {
+  assert.deepEqual(run(new SwipeTracker(), flick({ dy: UP, stillMs: 0 })).map((f) => f.swipe), ['swipe_up']);
+});
+
+test('with the guard on, a hand rising into view does not scroll', () => {
+  // Already moving when it appears: there was no still spell first.
+  assert.deepEqual(run(new SwipeTracker(GUARDED), flick({ dy: UP, stillMs: 0 })), []);
+});
+
+test('with the guard on, a hand lowered out of view does not scroll', () => {
+  const tracker = new SwipeTracker(GUARDED);
+  const fires = run(tracker, flick({ dy: DOWN, afterMs: 0 }));
+  tracker.handLost();
+  assert.deepEqual(fires, [], 'not before the hand was seen to stay');
+  // The confirmation was cancelled with the hand.
+  assert.equal(tracker.pending, null);
+});
+
+test('a slow drift up does not scroll', () => {
+  assert.deepEqual(run(new SwipeTracker(), flick({ dy: UP, durationMs: 1500 })), []);
+});
+
+test('scrolling rearms only after the hand changes shape', () => {
+  const tracker = new SwipeTracker();
+  const first = run(tracker, flick({ dy: DOWN }));
+  const again = run(tracker, flick({ dy: DOWN, start: { x: 0.5, y: 0.85 } }).map((f) => ({ ...f, t: f.t + 2000 })));
+  assert.equal(first.length, 1);
+  assert.deepEqual(again, [], 'still the same open hand');
+});
+
+// Each flick that doesn't scroll says why, so a live session can show which
+// rule is failing instead of a guess.
+
+/** Run a stream, then let the hand rest so the movement's verdict is final. */
+function verdictOf(stream) {
+  const tracker = new SwipeTracker();
+  run(tracker, stream);
+  const last = stream[stream.length - 1];
+  const rest = motionStream({ pose: 'open_palm', frames: 12, durationMs: 400, startT: last.t + 33, start: { x: 0.5, y: 0.6 + 0 } });
+  run(tracker, rest);
+  return tracker.lastFlick;
+}
+
+test('a good flick reports that it scrolled', () => {
+  const tracker = new SwipeTracker();
+  run(tracker, flick({ dy: UP }));
+  assert.equal(tracker.lastFlick.verdict, 'scrolled');
+  assert.equal(tracker.lastFlick.dir, 'up');
+});
+
+test('a short flick says it was too short, with how far it went', () => {
+  const v = verdictOf(flick({ dy: -0.1 }));
+  assert.equal(v.verdict, 'too short');
+  assert.ok(v.travel > 0.6 && v.travel < 1.2, `travel ${v.travel}`);
+  assert.equal(v.need, DEFAULT_SWIPE_OPTIONS.minTravel);
+});
+
+test('with the guard on, a flick with no still moment first says so', () => {
+  const tracker = new SwipeTracker(GUARDED);
+  run(tracker, flick({ dy: UP, stillMs: 0 }));
+  run(tracker, motionStream({ pose: 'open_palm', frames: 12, durationMs: 400, startT: 5000, start: { x: 0.5, y: 0.35 } }));
+  assert.equal(tracker.lastFlick.verdict, 'not from still');
+});
+
+test('a flick of a closed hand says the fingers were not out', () => {
+  const stream = sequence(
+    motionStream({ pose: 'fist', frames: 9, durationMs: 300, start: { x: 0.5, y: 0.6 } }),
+    motionStream({ pose: 'fist', frames: 8, durationMs: 250, dy: UP, start: { x: 0.5, y: 0.6 } }),
+  );
+  assert.equal(verdictOf(stream).verdict, 'fingers not all out');
+});
+
+test('with the guard on, a flick that ends with the hand out of view says it left', () => {
+  const tracker = new SwipeTracker(GUARDED);
+  run(tracker, flick({ dy: DOWN, afterMs: 0 }));
+  tracker.handLost();
+  assert.equal(tracker.lastFlick.verdict, 'left the view');
+});
+
+test('sideways swipes are unchanged by the vertical ones', () => {
+  const fires = run(new SwipeTracker(), sequence(
+    motionStream({ frames: 9, durationMs: 300, start: { x: 0.5, y: 0.75 } }),
+    motionStream({ dx: RIGHTWARD }),
+  ));
+  assert.deepEqual(fires.map((f) => f.swipe), ['swipe_right']);
 });
 
 test('detection is independent of distance from the camera', () => {

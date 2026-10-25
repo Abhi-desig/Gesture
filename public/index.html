@@ -3,108 +3,286 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light dark" />
     <title>gesture</title>
     <link rel="stylesheet" href="./styles.css" />
+    <link rel="stylesheet" href="./ui/mascot.css" />
   </head>
   <body>
-    <header>
-      <h1>gesture</h1>
-      <p class="sub">Hand gestures to keyboard shortcuts, via a local server.</p>
+    <header class="topbar">
+      <!-- The art is ui/mascot.svg, mounted by app.js. -->
+      <span id="mascot" class="mascot" data-mood="off" role="img" aria-label="Camera off" title="Camera off"></span>
+      <a class="brand" href="#/home">gesture</a>
+      <div id="status-chips" class="chips" role="status" aria-live="polite" aria-label="Status"></div>
+      <button id="diagnostics-btn" class="btn ghost" type="button" aria-expanded="false" aria-controls="diagnostics">
+        Diagnostics
+      </button>
     </header>
 
     <div id="banner" class="banner" hidden></div>
 
+    <div class="shell">
+      <nav class="sidebar" aria-label="Sections">
+        <a href="#/home" data-nav="home"><span aria-hidden="true">⌂</span>Home</a>
+        <a href="#/gestures" data-nav="gestures"><span aria-hidden="true">✋</span>Gestures</a>
+        <a href="#/screens" data-nav="screens"><span aria-hidden="true">▭</span>Screens</a>
+        <a href="#/measure" data-nav="measure"><span aria-hidden="true">◔</span>Measure</a>
+        <a href="#/lab" data-nav="lab"><span aria-hidden="true">✦</span>Lab</a>
+        <a href="#/settings" data-nav="settings"><span aria-hidden="true">⚙</span>Settings</a>
+      </nav>
 
-    <main>
-      <section class="stage-col">
-        <div class="stage">
-          <div class="mirror">
-            <video id="video" playsinline muted></video>
-            <canvas id="overlay"></canvas>
+      <main>
+        <!-- Home is never display:none: the camera preview lives here. -->
+        <section class="view view-home" data-view="home" aria-labelledby="h-home">
+          <h1 id="h-home" class="view-title">Home</h1>
+
+          <div class="home-grid">
+            <div class="card live-card">
+              <h2>What Gesture sees</h2>
+              <dl class="summary">
+                <dt>Seeing</dt>
+                <dd id="sum-seeing">Camera is off</dd>
+                <dt>Holding</dt>
+                <dd>
+                  <span class="meter" aria-hidden="true"><span id="sum-hold"></span></span>
+                </dd>
+                <dt id="sum-facing-label">Facing</dt>
+                <dd id="sum-facing">—</dd>
+                <dt>Last</dt>
+                <dd id="sum-last">Nothing yet</dd>
+              </dl>
+            </div>
+
+            <div class="card camera-card">
+              <div class="stage">
+                <div class="mirror">
+                  <video id="video" playsinline muted></video>
+                  <canvas id="overlay"></canvas>
+                </div>
+                <div id="stage-msg" class="stage-msg">Camera is off.</div>
+              </div>
+              <div class="controls">
+                <button id="camera-btn" class="btn">Start camera</button>
+                <button id="arm-btn" class="btn arm" aria-pressed="false">
+                  <span class="dot"></span><span id="arm-label">Disarmed</span>
+                </button>
+              </div>
+            </div>
           </div>
-          <div id="stage-msg" class="stage-msg">Camera is off.</div>
-        </div>
 
-        <div class="controls">
-          <button id="camera-btn" class="btn">Start camera</button>
-          <button id="arm-btn" class="btn arm" aria-pressed="false">
-            <span class="dot"></span><span id="arm-label">Disarmed</span>
-          </button>
-        </div>
-        <p class="hint">
-          Nothing is sent to the server while disarmed. Arming works without the
-          camera, so the test buttons can be used on their own.
-          <br />Detection runs in a background worker, so it keeps working while
-          you're in other apps — this window doesn't need focus or even to be
-          visible. Watch the <em>Detection</em> row to confirm.
-          Press <kbd>Esc</kbd> to disarm.
-        </p>
-      </section>
+          <div id="setup" class="card setup-card">
+            <div class="setup-head">
+              <h2>Setup</h2>
+              <span id="setup-progress" class="setup-progress"></span>
+              <button id="setup-toggle" class="link" type="button">Hide</button>
+            </div>
+            <ol id="setup-steps" class="setup-steps"></ol>
+          </div>
 
-      <section class="panel">
-        <h2>Live</h2>
-        <dl class="readout">
-          <dt>Detection</dt>
-          <dd id="r-detection">off</dd>
-          <dt>Pose</dt>
-          <dd id="r-pose">—</dd>
-          <dt>Held</dt>
-          <dd id="r-held">—</dd>
-          <dt>Palm speed</dt>
-          <dd id="r-velocity">—</dd>
-          <dt>Swipe pose</dt>
-          <dd id="r-fourfinger">—</dd>
-          <dt>Swipe ready</dt>
-          <dd id="r-rearm">—</dd>
-          <dt>Backend</dt>
-          <dd id="r-backend">—</dd>
-          <dt>Taught match</dt>
-          <dd id="r-custom">—</dd>
-          <dt>Head</dt>
-          <dd id="r-head">—</dd>
-          <dt>Facing</dt>
-          <dd id="r-facing">—</dd>
-          <dt>Sound</dt>
-          <dd id="r-sound">—</dd>
-        </dl>
+          <p class="hint">
+            Detection runs in a background worker, so it keeps working while you're in
+            other apps — this window doesn't need to be visible. Nothing acts while
+            disarmed; press <kbd>Esc</kbd> to disarm at any time.
+          </p>
+        </section>
 
-        <h2>Screens</h2>
-        <div id="desk-map" class="desk-map" role="group" aria-label="Your screens, as macOS arranges them" hidden></div>
-        <div class="teach">
-          <button id="calibrate-btn" class="btn" type="button">Calibrate</button>
-        </div>
-        <p id="screens-status" class="hint">Looking for your screens…</p>
+        <section class="view" data-view="gestures" aria-labelledby="h-gestures">
+          <h1 id="h-gestures" class="view-title">Gestures</h1>
+          <div class="card">
+            <h2>What each gesture does</h2>
+            <table class="bindings">
+              <tbody id="bindings-body"></tbody>
+            </table>
+            <p id="bindings-status" class="hint" role="status" aria-live="polite">
+              Choose what each gesture does — it's saved to <code>config.json</code> straight away.
+            </p>
+          </div>
 
-        <h2>Bindings</h2>
-        <table class="bindings">
-          <tbody id="bindings-body"></tbody>
-        </table>
-        <p class="hint">
-          Edit <code>config.json</code> to change these. The server reloads it on
-          save — no restart.
-        </p>
+          <div class="card">
+            <h2>Your gestures</h2>
+            <div class="teach">
+              <input id="teach-name" type="text" placeholder="name, e.g. wave" maxlength="32"
+                autocomplete="off" spellcheck="false" aria-label="Name for the new gesture" />
+              <button id="teach-btn" class="btn" type="button">Record</button>
+            </div>
+            <p id="teach-status" class="hint">
+              Hold a new hand shape in view and Gesture keeps five samples of it, in this
+              browser only. Then choose what it does in the list above.
+            </p>
+            <ul id="custom-list" class="custom-list">
+              <li class="empty">None yet.</li>
+            </ul>
+          </div>
+        </section>
 
-        <h2>Your gestures</h2>
-        <div class="teach">
-          <input id="teach-name" type="text" placeholder="name, e.g. peace" maxlength="32"
-            autocomplete="off" spellcheck="false" aria-label="Name for the new gesture" />
-          <button id="teach-btn" class="btn" type="button">Record</button>
-        </div>
-        <p id="teach-status" class="hint">
-          Hold a new hand shape in view and Gesture keeps five samples of it, in this
-          browser only. Then bind it in <code>config.json</code> as
-          <code>"custom:name": "…"</code>.
-        </p>
-        <ul id="custom-list" class="custom-list">
-          <li class="empty">None yet.</li>
-        </ul>
+        <section class="view" data-view="screens" aria-labelledby="h-screens">
+          <h1 id="h-screens" class="view-title">Screens</h1>
+          <div class="card">
+            <h2>Your desk</h2>
+            <div id="desk-map" class="desk-map" role="group" aria-label="Your screens, as macOS arranges them" hidden></div>
+            <div class="teach">
+              <button id="calibrate-btn" class="btn" type="button">Calibrate</button>
+            </div>
+            <p id="screens-status" class="hint">Looking for your screens…</p>
+          </div>
+        </section>
 
-        <h2>Activity</h2>
-        <ul id="log" class="log">
-          <li class="empty">Nothing yet.</li>
-        </ul>
-      </section>
-    </main>
+        <section class="view" data-view="measure" aria-labelledby="h-measure">
+          <h1 id="h-measure" class="view-title">Measure</h1>
+          <div class="card">
+            <h2>Check-up</h2>
+            <div class="teach">
+              <input id="participant" type="text" placeholder="participant, e.g. p1" maxlength="16"
+                autocomplete="off" spellcheck="false" aria-label="Participant code" />
+              <button id="checkup-btn" class="btn" type="button">Run check-up</button>
+            </div>
+            <p id="measure-status" class="hint">
+              About four minutes of spoken prompts: look at each screen, then pinch, make an
+              OK sign, close your open hand, cover the camera, "shh", and swipe up and down. Results are saved on this Mac in <code>experiments/</code>.
+              Each person uses their own code and calibrates first.
+            </p>
+            <table id="measure-results" class="results" hidden>
+              <tbody></tbody>
+            </table>
+          </div>
+        </section>
+
+        <section class="view" data-view="lab" aria-labelledby="h-lab">
+          <h1 id="h-lab" class="view-title">Lab <span class="badge">experimental</span></h1>
+
+          <div class="lab-grid">
+            <div class="card lab-stage-card">
+              <div id="lab-stage" class="stage lab-stage">
+                <video id="lab-video" playsinline muted></video>
+                <canvas id="lab-canvas"></canvas>
+                <div id="lab-msg" class="stage-msg">
+                  <div>
+                    <p id="lab-msg-text">Start the camera to use the Lab.</p>
+                    <button id="lab-camera" class="btn" type="button">Start camera</button>
+                  </div>
+                </div>
+              </div>
+              <div class="controls">
+                <button id="lab-vanish" class="btn" type="button" disabled>Vanish</button>
+                <button id="lab-room-btn" class="btn" type="button">Capture the room</button>
+                <button id="lab-record" class="btn" type="button">Record</button>
+                <a id="lab-save" class="btn ghost" hidden>Save clip</a>
+              </div>
+              <p id="lab-status" class="hint" role="status" aria-live="polite">
+                Snap to vanish. Gestures are paused while the Lab is open.
+              </p>
+            </div>
+
+            <div class="lab-side">
+              <div class="card">
+                <h2>What the Lab sees</h2>
+                <dl class="summary">
+                  <dt>Snap</dt>
+                  <dd id="lab-snap-state">Ready</dd>
+                  <dt>So far</dt>
+                  <dd id="lab-counts">0 snaps · 0 vanishes</dd>
+                  <dt>Room seen</dt>
+                  <dd>
+                    <span id="lab-room-pct">0%</span>
+                    <span class="meter" aria-hidden="true"><span id="lab-room-bar"></span></span>
+                  </dd>
+                  <dt>Cutout</dt>
+                  <dd id="lab-cutout">—</dd>
+                </dl>
+                <p class="hint">
+                  The room is learned as you move, never including you. <strong>Capture the
+                  room</strong> starts it over and talks you through it: lean far left, then far
+                  right (or step out of view), so it sees what you were covering. What it never
+                  sees is guessed row by row from the room either side.
+                </p>
+              </div>
+
+              <div class="card">
+                <h2>The dust</h2>
+                <div id="lab-dust" class="sliders"></div>
+                <button id="lab-dust-reset" class="link" type="button">Reset</button>
+              </div>
+
+              <div class="card">
+                <h2>Snap practice</h2>
+                <p id="lab-practice-status" class="hint">
+                  About a minute: snap when you hear the chime, ten times, then move your hand
+                  for 20 s without snapping. It measures how many snaps are caught and how often
+                  one is seen that wasn't there. Saved on this Mac in <code>experiments/</code>.
+                </p>
+                <div class="controls">
+                  <button id="lab-practice" class="btn" type="button">Start practice</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="view" data-view="settings" aria-labelledby="h-settings">
+          <h1 id="h-settings" class="view-title">Settings</h1>
+          <div class="card">
+            <h2>Current settings</h2>
+            <dl id="settings-summary" class="readout"></dl>
+            <p class="hint">
+              These come from <code>config.json</code>, which the server reloads on save.
+              What each gesture does can be changed on the Gestures page.
+            </p>
+          </div>
+
+          <div class="card">
+            <h2>This browser</h2>
+            <label class="toggle">
+              <input id="mascot-toggle" type="checkbox" checked />
+              Show the mascot in this page's header
+            </label>
+            <p class="hint">
+              The face shows Gesture's state at a glance: asleep when disarmed, watching your
+              hand, a nod when a gesture works, a shrug when it doesn't. Its eyes look toward
+              the screen you're facing. The desktop app (<code>npm run app:dev</code>) also
+              puts it in the orb under your camera, whatever this switch says.
+            </p>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <aside id="diagnostics" class="drawer" aria-label="Diagnostics" hidden>
+      <div class="drawer-head">
+        <h2>Diagnostics</h2>
+        <button id="diagnostics-close" class="btn ghost" type="button">Close</button>
+      </div>
+      <dl class="readout">
+        <dt>Detection</dt>
+        <dd id="r-detection">off</dd>
+        <dt>Pose</dt>
+        <dd id="r-pose">—</dd>
+        <dt>Held</dt>
+        <dd id="r-held">—</dd>
+        <dt>Palm speed</dt>
+        <dd id="r-velocity">—</dd>
+        <dt>Swipe pose</dt>
+        <dd id="r-fourfinger">—</dd>
+        <dt>Swipe ready</dt>
+        <dd id="r-rearm">—</dd>
+        <dt>Up / down swipe</dt>
+        <dd id="r-flick">—</dd>
+        <dt>Backend</dt>
+        <dd id="r-backend">—</dd>
+        <dt>Taught match</dt>
+        <dd id="r-custom">—</dd>
+        <dt>Head</dt>
+        <dd id="r-head">—</dd>
+        <dt>Facing</dt>
+        <dd id="r-facing">—</dd>
+        <dt>Sound</dt>
+        <dd id="r-sound">—</dd>
+      </dl>
+
+      <h2>Activity</h2>
+      <ul id="log" class="log">
+        <li class="empty">Nothing yet.</li>
+      </ul>
+    </aside>
 
     <script type="module" src="./app.js"></script>
   </body>

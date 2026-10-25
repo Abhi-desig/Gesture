@@ -2,14 +2,17 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 
 import {
-  Carry,
   FACE,
+  OneEuroFilter,
   ScreenTracker,
   angleBetween,
   crowdedScreens,
+  screenDuring,
   headPose,
+  spokenLabels,
   summarizeHead,
 } from '../public/screens.js';
+import { seededRandom } from '../public/stats.js';
 
 /**
  * A face mesh with only the four points headPose reads, placed on a head of
@@ -133,64 +136,93 @@ test('crowdedScreens names screens calibrated too close together', () => {
   );
 });
 
-// -------------------------------------------------------------- carrying
+// -------------------------------------------------------------- 1€ filter
 
-const RELEASE_MS = 200;
+test('the 1€ filter passes a steady value through unchanged', () => {
+  const f = new OneEuroFilter({ minCutoff: 1, beta: 0.1 });
+  for (let t = 0; t <= 1000; t += 50) assert.ok(Math.abs(f.filter(12, t) - 12) < 1e-9);
+});
 
-/** Feed a carry `ms` worth of frames at 30fps with a fixed pose and screen. */
-function hold(carry, { pose, screen, from, ms }) {
-  const drops = [];
-  for (let t = from; t <= from + ms; t += 33) {
-    const drop = carry.update(pose, screen, t);
-    if (drop) drops.push(drop);
+test('beta opens the filter on a fast turn; at 0 it is just a slow EMA', () => {
+  const stepAfterOne = (beta) => {
+    const f = new OneEuroFilter({ minCutoff: 1, beta });
+    f.filter(0, 0);
+    return f.filter(30, 50);
+  };
+  const still = stepAfterOne(0);
+  const quick = stepAfterOne(0.1);
+  // minCutoff 1 Hz at 20 Hz readings: alpha = 1/(1 + 1/(2π·1·0.05)) ≈ 0.239.
+  assert.ok(Math.abs(still - 30 * 0.239) < 0.1, `beta 0 moved ${still.toFixed(2)}°`);
+  assert.ok(quick > 20, `beta 0.1 should cover most of a 30° turn at once, got ${quick.toFixed(2)}°`);
+});
+
+test('at rest the 1€ filter damps jitter', () => {
+  const rng = seededRandom(5);
+  const f = new OneEuroFilter({ minCutoff: 1, beta: 0.1 });
+  const raw = [];
+  const smooth = [];
+  for (let t = 0; t <= 3000; t += 50) {
+    const x = 10 + (rng() - 0.5) * 2;
+    raw.push({ yaw: x, pitch: 0 });
+    smooth.push({ yaw: f.filter(x, t), pitch: 0 });
   }
-  return drops;
-}
-
-test('point, turn to another screen, let go: the window moves there', () => {
-  const c = new Carry({ releaseMs: RELEASE_MS });
-  c.start('point', 1, 0);
-  assert.deepEqual(hold(c, { pose: 'point', screen: 1, from: 0, ms: 300 }), []);
-  assert.deepEqual(hold(c, { pose: 'point', screen: 2, from: 333, ms: 300 }), []);
-  assert.deepEqual(hold(c, { pose: null, screen: 2, from: 666, ms: 400 }), [
-    { gesture: 'point', from: 1, to: 2 },
-  ]);
-  assert.equal(c.active, false);
+  assert.ok(summarizeHead(smooth.slice(20)).spread < summarizeHead(raw.slice(20)).spread);
 });
 
-test('pointing and letting go on the same screen moves nothing', () => {
-  // The common case — point to focus — must never turn into a move.
-  const c = new Carry({ releaseMs: RELEASE_MS });
-  c.start('point', 1, 0);
-  hold(c, { pose: 'point', screen: 1, from: 0, ms: 300 });
-  assert.deepEqual(hold(c, { pose: null, screen: 1, from: 333, ms: 400 }), []);
-  assert.equal(c.active, false);
+test('two readings in the same millisecond do not break the filter', () => {
+  const f = new OneEuroFilter();
+  f.filter(0, 100);
+  assert.ok(Number.isFinite(f.filter(5, 100)));
 });
 
-test('one dropped tracking frame is not letting go', () => {
-  const c = new Carry({ releaseMs: RELEASE_MS });
-  c.start('point', 1, 0);
-  assert.equal(c.update('point', 2, 100), null);
-  assert.equal(c.update(null, 2, 133), null);
-  assert.equal(c.update('point', 2, 166), null);
-  assert.equal(c.active, true);
+test('the tracker uses 1€ only when given timestamps, and EMA otherwise', () => {
+  const euro = new ScreenTracker({ filter: 'oneEuro', minCutoff: 1, beta: 0.1 });
+  euro.setCalibration([BUILTIN, BENQ]);
+  euro.update({ yaw: 0, pitch: 0 }, 0);
+  assert.equal(euro.update({ yaw: 30, pitch: 0 }, 50).screen, 2, 'one reading is enough to cross over');
+
+  const ema = new ScreenTracker({ filter: 'ema', smoothing: 0.35 });
+  ema.setCalibration([BUILTIN, BENQ]);
+  ema.update({ yaw: 0, pitch: 0 }, 0);
+  assert.equal(ema.update({ yaw: 30, pitch: 0 }, 50).screen, 1, 'the EMA is still on the way');
 });
 
-test('losing the face mid-turn keeps the last screen faced', () => {
-  const c = new Carry({ releaseMs: RELEASE_MS });
-  c.start('point', 1, 0);
-  c.update('point', 2, 100);
-  c.update('point', null, 133);
-  assert.deepEqual(hold(c, { pose: null, screen: null, from: 166, ms: 300 }), [
-    { gesture: 'point', from: 1, to: 2 },
-  ]);
+test('spoken labels are short, and tell identical monitors apart', () => {
+  assert.deepEqual(
+    spokenLabels([
+      { id: 1, name: 'Built-in Retina Display', x: 0, builtin: true },
+      { id: 2, name: 'BenQ GW2480', x: 1440, builtin: false },
+    ]),
+    { 1: 'laptop', 2: 'BenQ' },
+  );
+  assert.deepEqual(
+    spokenLabels([
+      { id: 5, name: 'DELL U2720Q', x: 1920 },
+      { id: 4, name: 'DELL U2720Q', x: 0 },
+    ]),
+    { 4: 'left DELL', 5: 'right DELL' },
+  );
 });
 
-test('a forgotten hold expires instead of moving a window much later', () => {
-  const c = new Carry({ releaseMs: RELEASE_MS, timeoutMs: 1000 });
-  c.start('point', 1, 0);
-  c.update('point', 2, 500);
-  assert.equal(c.update('point', 2, 1500), null);
-  assert.equal(c.active, false);
-  assert.deepEqual(hold(c, { pose: null, screen: 2, from: 1533, ms: 300 }), []);
+// ------------------------------------------------- the screen a pinch means
+
+test('a pinch aims at the screen faced during its own hold', () => {
+  const history = [{ t: 0, screen: 1 }, { t: 1000, screen: 2 }];
+  // Turned to screen 2 at 1000, pinched from 1100 to 1300: screen 2.
+  assert.deepEqual(screenDuring(history, 1100, 1300), { screen: 2, share: 1 });
+  // Pinched entirely before the turn: screen 1, even if the head moves after.
+  assert.deepEqual(screenDuring(history, 700, 950), { screen: 1, share: 1 });
+});
+
+test('mid-turn, with no screen holding most of the hold, it answers nothing', () => {
+  const history = [{ t: 0, screen: 1 }, { t: 1000, screen: null }, { t: 1100, screen: 2 }];
+  assert.equal(screenDuring(history, 950, 1150), null);
+  assert.equal(screenDuring(history, 950, 1150, { minShare: 0.2 }).screen, null, 'the longest stretch faced nothing');
+});
+
+test('facing no screen for most of the hold is an answer too', () => {
+  const history = [{ t: 0, screen: null }];
+  assert.deepEqual(screenDuring(history, 100, 300), { screen: null, share: 1 });
+  assert.equal(screenDuring([], 100, 300), null);
+  assert.equal(screenDuring(history, 300, 300), null);
 });

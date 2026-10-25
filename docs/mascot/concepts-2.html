@@ -1,0 +1,209 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot: four more ideas</title>
+<style>
+  :root { --bg: #f4f2ee; --panel: #fff; --text: #1b1b1f; --dim: #6b6b72; --line: #e6e2da; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lede { color: var(--dim); margin: 0 0 20px; max-width: 72ch; }
+  .concept { background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 18px; margin-bottom: 18px;
+    display: grid; grid-template-columns: 170px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .concept { grid-template-columns: 1fr; } }
+  .hero { display: grid; justify-items: center; gap: 6px; padding: 8px; }
+  .hero h2 { margin: 0; font-size: 16px; }
+  .hero p { margin: 0; color: var(--dim); font-size: 12px; text-align: center; }
+  .states { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .state { display: grid; justify-items: center; gap: 4px; background: #faf8f5; border-radius: 10px; padding: 10px 6px; }
+  .state b { font-size: 12px; } .state span { font-size: 11px; color: var(--dim); text-align: center; }
+
+  /* A stand-in macOS 26 desktop, and the orb as a floating Liquid Glass
+     island. The real one is AppKit's NSGlassEffectView. */
+  .desk { position: relative; height: 112px; border-radius: 12px; overflow: hidden;
+    background: radial-gradient(120% 140% at 15% 0%, #ff9f6e 0%, #e2557e 38%, #6a4fd0 72%, #2a2d6e 100%); }
+  .desk.calm { background: radial-gradient(120% 140% at 80% 0%, #bfe3ff 0%, #7fb2e8 40%, #3f6fb5 75%, #1d3466 100%); }
+  .menubar { position: absolute; inset: 0 0 auto; height: 24px; display: flex; justify-content: space-between;
+    padding: 0 12px; align-items: center; font-size: 12px; font-weight: 600; color: rgba(255,255,255,.92);
+    text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 10px; color: #fff; white-space: nowrap;
+    background: linear-gradient(180deg, rgba(255,255,255,.32), rgba(255,255,255,.12));
+    -webkit-backdrop-filter: blur(18px) saturate(180%); backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255,255,255,.5);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.55), inset 0 -6px 12px rgba(255,255,255,.12), 0 6px 18px rgba(20,10,40,.25); }
+  .glass.tab { height: 28px; padding: 0 5px; border-radius: 14px; }
+  .glass.pill { height: 44px; padding: 0 18px 0 6px; border-radius: 22px; }
+  .glass .t1 { font-weight: 600; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass .t2 { font-size: 11px; opacity: .85; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .desks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .desk .cap { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: rgba(255,255,255,.85); }
+  .note { color: var(--dim); font-size: 12px; margin: 8px 0 0; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gesture mascot: four more ideas</h1>
+  <p class="lede">Further from the references this time, and each one about Gesture itself: spatial computing,
+    your hand, the gesture you just made, the camera's pixels. Same moments as before (awake, camera off,
+    OK sign, refused), and each at real size in a floating glass island: 22 px at rest, 32 px when it speaks.</p>
+  <div id="concepts"></div>
+</main>
+
+<script>
+const INK = '#17161c';
+let uid = 0;
+
+// ------------------------------------------------------------ D: Visor
+// A small vinyl buddy wearing a spatial-computing visor. The eyes are light on
+// dark glass, like your pink robot's screen face, and the glass ties it to the
+// orb it lives in.
+function visor({ eyes = 'open', gx = 0, hands = null, tilt = 0, id }) {
+  const ex = gx * 1.8;
+  const glowEye = (x) => {
+    if (eyes === 'off') return '';
+    if (eyes === 'happy') return `<path d="M${x - 1.7} 15.6 Q${x} 13.6 ${x + 1.7} 15.6" stroke="#7ef0dc" stroke-width="1.4" fill="none" stroke-linecap="round"/>`;
+    if (eyes === 'wink' && x > 16) return `<path d="M${x - 1.6} 15.2 H${x + 1.6}" stroke="#7ef0dc" stroke-width="1.4" stroke-linecap="round"/>`;
+    if (eyes === 'sad') return `<path d="M${x - 1.6} 14.4 L${x + 1.6} ${x < 16 ? 15.6 : 14.4}" stroke="#7ef0dc" stroke-width="1.4" stroke-linecap="round"/>`;
+    return `<rect x="${x - 1.15 + ex}" y="12.8" width="2.3" height="4.4" rx="1.15" fill="#7ef0dc"/>`;
+  };
+  const arm = (x, y, r) => `<rect x="${x - 1.9}" y="${y - 3.6}" width="3.8" height="7.2" rx="1.9" fill="url(#${id}-b)" transform="rotate(${r} ${x} ${y})"/>`;
+  const handSets = {
+    cover: arm(11.4, 15.2, 70) + arm(20.6, 15.2, -70),
+    ok: arm(27.4, 12.4, -20) + `<circle cx="28.4" cy="8.2" r="1.8" fill="none" stroke="#ff8a3d" stroke-width="1.3"/>`,
+    shrug: arm(4.2, 13, -36) + arm(27.8, 13, 36),
+  };
+  return `<defs>
+      <radialGradient id="${id}-b" cx="35%" cy="28%" r="80%"><stop offset="0" stop-color="#ffc06a"/><stop offset=".6" stop-color="#ff9a3c"/><stop offset="1" stop-color="#e57a1c"/></radialGradient>
+      <linearGradient id="${id}-v" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#3a3d4a"/><stop offset=".5" stop-color="#16171d"/><stop offset="1" stop-color="#0d0d12"/></linearGradient>
+    </defs>
+    <g transform="rotate(${tilt} 16 17)">
+      ${hands && hands !== 'cover' ? handSets[hands] : ''}
+      <circle cx="16" cy="16.6" r="11.6" fill="url(#${id}-b)"/>
+      <rect x="7" y="10.4" width="18" height="9.2" rx="4.6" fill="url(#${id}-v)"/>
+      <path d="M9.6 11.6 H20.4" stroke="#fff" stroke-opacity=".35" stroke-width=".9" stroke-linecap="round"/>
+      ${glowEye(12.6)}${glowEye(19.4)}
+      <path d="M14.8 22.6 Q16 23.4 17.2 22.6" stroke="${INK}" stroke-width="1" fill="none" stroke-linecap="round" opacity=".7"/>
+      ${hands === 'cover' ? handSets.cover : ''}
+    </g>`;
+}
+
+// ------------------------------------------------------------ E: Mitt
+// A mitten with a face: the simplest hand there is, so it can be a hand at
+// 22 px without fingers to blur. Black outline from your robot, the deadpan
+// face from your vinyl figure, and its striped cuff is that figure's socks.
+function mitt({ eyes = 'open', thumb = 'side', tilt = 0, gx = 0 }) {
+  const ex = gx * 1.2;
+  const eye = (x) => eyes === 'closed'
+    ? `<path d="M${x - 1.4} 14.4 Q${x} 15.4 ${x + 1.4} 14.4" stroke="${INK}" stroke-width="1.15" fill="none" stroke-linecap="round"/>`
+    : eyes === 'wink' && x > 14
+      ? `<path d="M${x - 1.4} 14.2 H${x + 1.4}" stroke="${INK}" stroke-width="1.15" stroke-linecap="round"/>`
+      : `<circle cx="${x + ex}" cy="14.2" r="1.25" fill="${INK}"/>`;
+  const thumbs = {
+    side: 'M22.2 16.4 Q26.6 14.8 26.4 18.6 Q26 21.4 22.4 21.2',
+    up: 'M21.6 12.8 Q22 7.2 24.6 7.6 Q26.8 8 25.4 13.4 L22.4 15.6',
+    over: 'M21.8 15.6 Q16 11.6 12.4 13.6 Q11.4 15.6 14.2 16.4 L21 18.4',
+    out: 'M22.2 15 Q28.4 10.6 28.8 13.6 Q29 16 22.4 19.6',
+  };
+  return `<g transform="rotate(${tilt} 16 17)">
+      <path d="M9.6 25.4 V12.6 Q9.6 5.4 16 5.4 Q22.4 5.4 22.4 12.6 V25.4 Z" fill="#ff7ac6" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round"/>
+      <path d="${thumbs[thumb]}" fill="#ff7ac6" stroke="${INK}" stroke-width="1.4" stroke-linejoin="round" stroke-linecap="round"/>
+      <rect x="9.6" y="23.2" width="12.8" height="5.6" rx="1.2" fill="#fff" stroke="${INK}" stroke-width="1.4"/>
+      <path d="M9.6 25.1 H22.4 M9.6 26.9 H22.4" stroke="#ff5a3c" stroke-width="1"/>
+      ${thumb === 'over' ? '' : eye(13.6) + eye(18.4)}
+      <path d="M15 18.2 H17" stroke="${INK}" stroke-width="1.1" stroke-linecap="round"/>
+    </g>`;
+}
+
+// ------------------------------------------------------------ F: Signal
+// A round vinyl body with half-moon eyes, and on its antenna a little hand that
+// copies the gesture you just made: your robot's antenna, your duck's eyes.
+function signal({ hand = 'fist', gx = 0.5, eyes = 'open', tilt = 0, id }) {
+  const eye = (cx) => {
+    if (eyes === 'closed') return `<path d="M${cx - 2.9} 17.6 H${cx + 2.9}" stroke="${INK}" stroke-width="1.3" stroke-linecap="round"/>`;
+    if (eyes === 'wink' && cx > 16) return `<path d="M${cx - 2.6} 17 Q${cx} 15 ${cx + 2.6} 17" stroke="${INK}" stroke-width="1.3" fill="none" stroke-linecap="round"/>`;
+    const p = cx + gx * 1.5;
+    return `<clipPath id="${id}-e${cx}"><path d="M${cx - 2.9} 17.6 A2.9 2.9 0 0 1 ${cx + 2.9} 17.6 Z"/></clipPath>
+      <path d="M${cx - 2.9} 17.6 A2.9 2.9 0 0 1 ${cx + 2.9} 17.6 Z" fill="#fff8ee"/>
+      <circle cx="${p}" cy="17.6" r="2.3" fill="${INK}" clip-path="url(#${id}-e${cx})"/>`;
+  };
+  const hands = {
+    fist: `<circle cx="16" cy="4.2" r="2.4" fill="#3cc9b4"/>`,
+    ok: `<circle cx="15.4" cy="4.6" r="2" fill="none" stroke="#3cc9b4" stroke-width="1.4"/><path d="M17.4 3.8 V0.8 M18.8 4.6 V1.6" stroke="#3cc9b4" stroke-width="1.3" stroke-linecap="round"/>`,
+    palm: `<path d="M13.6 6.4 V2 M15.2 6 V0.8 M16.8 6 V0.8 M18.4 6.4 V2" stroke="#3cc9b4" stroke-width="1.3" stroke-linecap="round"/><rect x="13" y="4.6" width="6" height="3.4" rx="1.6" fill="#3cc9b4"/>`,
+    none: '',
+  };
+  return `<defs><radialGradient id="${id}-b" cx="36%" cy="30%" r="80%"><stop offset="0" stop-color="#ffc56a"/><stop offset=".6" stop-color="#ffa22e"/><stop offset="1" stop-color="#e8851a"/></radialGradient></defs>
+    <g transform="rotate(${tilt} 16 18)">
+      <path d="M16 8.6 V6.6" stroke="${INK}" stroke-width="1.2" stroke-linecap="round"/>
+      ${hands[hand]}
+      <circle cx="16" cy="18.4" r="10.4" fill="url(#${id}-b)"/>
+      ${eye(12.2)}${eye(19.8)}
+    </g>`;
+}
+
+// ------------------------------------------------------------ G: Pixel
+// A creature made of the camera's own pixels, on a 12×12 grid: crisp at 22 px,
+// where curves go soft. Your robot's colours and screen face.
+function pixel({ eyes = 'open', arms = 'down', gx = 0 }) {
+  const P = (x, y, w = 1, h = 1, c = INK) => `<rect x="${4 + x * 2}" y="${4 + y * 2}" width="${w * 2}" height="${h * 2}" fill="${c}"/>`;
+  const shift = Math.round(gx);
+  const eye = (x) => eyes === 'closed' ? P(x, 6, 2, 1) : eyes === 'wink' && x > 5 ? P(x, 6, 2, 1) : P(x + shift, 4, 1, 3);
+  const armSets = {
+    down: P(0, 7, 1, 2) + P(11, 7, 1, 2),
+    cover: P(2, 4, 3, 3, '#ff7ac6') + P(7, 4, 3, 3, '#ff7ac6'),
+    ok: P(0, 7, 1, 2) + P(11, 3, 1, 3) + P(10, 1, 2, 1, '#3cc9b4') + P(10, 2, 1, 1, '#3cc9b4') + P(11, 2, 1, 1, '#3cc9b4'),
+    up: P(0, 3, 1, 2) + P(11, 3, 1, 2),
+  };
+  return `<g shape-rendering="crispEdges">
+      ${P(2, 0, 8, 10, INK)}${P(1, 1, 10, 8, INK)}
+      ${P(2, 1, 8, 8, '#3cc9b4')}${P(3, 2, 7, 6, '#fff')}
+      ${arms === 'cover' ? '' : eye(4) + eye(7)}
+      ${armSets[arms]}
+      ${P(3, 10, 2, 1)}${P(7, 10, 2, 1)}
+    </g>`;
+}
+
+const svg = (draw, size, o = {}) => {
+  uid += 1;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true">${draw({ ...o, id: `m${uid}` })}</svg>`;
+};
+
+const CONCEPTS = [
+  { key: 'D', name: 'Visor', draw: visor, from: 'Spatial computing',
+    why: 'A vinyl buddy in a Vision-Pro-style visor: the eyes glow on dark glass, so it matches the glass orb it lives in, and the gaze slides across the visor toward the screen you face.',
+    states: [{ gx: 0.5 }, { eyes: 'off', hands: 'cover' }, { eyes: 'wink', hands: 'ok' }, { eyes: 'sad', hands: 'shrug', tilt: 8 }] },
+  { key: 'E', name: 'Mitt', draw: mitt, from: 'Your hand, simplified',
+    why: 'A mitten with a face: a hand with no fingers to blur at 22 px. The thumb does the acting: up for done, over its eyes for camera off. The striped cuff is your vinyl figure’s socks.',
+    states: [{}, { thumb: 'over', eyes: 'closed' }, { thumb: 'up', eyes: 'wink' }, { thumb: 'out', tilt: 10 }] },
+  { key: 'F', name: 'Signal', draw: signal, from: 'The gesture you just made',
+    why: 'A little hand on its antenna copies the gesture you just made (fist, OK, open palm), so it shows which one fired without words. Half-moon eyes look at your screen.',
+    states: [{ hand: 'fist' }, { hand: 'none', eyes: 'closed' }, { hand: 'ok', eyes: 'wink' }, { hand: 'palm', tilt: 10, gx: -0.6 }] },
+  { key: 'G', name: 'Pixel', draw: pixel, from: 'The camera’s pixels',
+    why: 'Made of square pixels on a 12×12 grid, like what the camera sees. Crisp at 22 px, where every curve goes soft. Pink hands come out for the gestures.',
+    states: [{ gx: 1 }, { arms: 'cover' }, { eyes: 'wink', arms: 'ok' }, { arms: 'up' }] },
+];
+const LABELS = [['Awake', 'looking at your screen'], ['Camera off', 'covers its eyes, like you cover the lens'],
+  ['OK sign → armed', 'a wink and an OK'], ['Refused', 'a shrug']];
+
+document.getElementById('concepts').innerHTML = CONCEPTS.map((c) => `
+  <section class="concept">
+    <div class="hero">${svg(c.draw, 128, c.states[0])}<h2>${c.key}. ${c.name}</h2><p>${c.from}</p></div>
+    <div>
+      <div class="states">${c.states.map((s, i) => `<div class="state">${svg(c.draw, 56, s)}<b>${LABELS[i][0]}</b><span>${LABELS[i][1]}</span></div>`).join('')}</div>
+      <div class="desks">
+        <div class="desk"><div class="menubar"><span>  Finder  File  Edit</span><span>Wi‑Fi  10:42</span></div>
+          <div class="glass tab">${svg(c.draw, 22, c.states[0])}</div><span class="cap">At rest: 22 px in a glass island</span></div>
+        <div class="desk calm"><div class="menubar"><span>  Notes</span><span>10:42</span></div>
+          <div class="glass pill">${svg(c.draw, 32, c.states[2])}<div><div class="t1">OK sign → armed</div><div class="t2">Ready</div></div></div>
+          <span class="cap">Saying something: 32 px</span></div>
+      </div>
+      <p class="note">${c.why}</p>
+    </div>
+  </section>`).join('');
+</script>
+</body>
+</html>
