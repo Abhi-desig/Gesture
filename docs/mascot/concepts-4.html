@@ -1,0 +1,201 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot: clean and smooth</title>
+<style>
+  :root { --bg: #f5f4f2; --panel: #fff; --text: #1b1b1f; --dim: #6b6b72; --line: #e8e5e0; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  main { max-width: 1040px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lede { color: var(--dim); margin: 0 0 20px; max-width: 72ch; }
+  .concept { background: var(--panel); border: 1px solid var(--line); border-radius: 18px; padding: 18px; margin-bottom: 18px;
+    display: grid; grid-template-columns: 200px 1fr; gap: 18px; align-items: start; }
+  @media (max-width: 760px) { .concept { grid-template-columns: 1fr; } }
+  .hero { display: grid; justify-items: center; gap: 6px; padding: 14px 10px; border-radius: 16px;
+    background: radial-gradient(80% 70% at 50% 40%, #ffffff 0%, #f1efec 100%); }
+  .hero h2 { margin: 0; font-size: 17px; }
+  .hero p { margin: 0; color: var(--dim); font-size: 12px; text-align: center; }
+  .story { margin: 0 0 12px; font-size: 13px; max-width: 70ch; }
+  .states { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .state { display: grid; justify-items: center; gap: 4px; background: #faf9f7; border-radius: 12px; padding: 12px 4px 10px; }
+  .state b { font-size: 11.5px; text-align: center; } .state span { font-size: 10.5px; color: var(--dim); text-align: center; }
+
+  .desk { position: relative; height: 112px; border-radius: 12px; overflow: hidden;
+    background: radial-gradient(120% 140% at 15% 0%, #ff9f6e 0%, #e2557e 38%, #6a4fd0 72%, #2a2d6e 100%); }
+  .desk.calm { background: radial-gradient(120% 140% at 80% 0%, #bfe3ff 0%, #7fb2e8 40%, #3f6fb5 75%, #1d3466 100%); }
+  .menubar { position: absolute; inset: 0 0 auto; height: 24px; display: flex; justify-content: space-between;
+    padding: 0 12px; align-items: center; font-size: 12px; font-weight: 600; color: rgba(255,255,255,.92);
+    text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 10px; color: #fff; white-space: nowrap;
+    background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.12));
+    -webkit-backdrop-filter: blur(18px) saturate(180%); backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255,255,255,.5);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -6px 12px rgba(255,255,255,.12), 0 6px 18px rgba(20,10,40,.25); }
+  .glass.tab { height: 30px; padding: 0 5px; border-radius: 15px; }
+  .glass.pill { height: 44px; padding: 0 18px 0 6px; border-radius: 22px; }
+  .glass .t1 { font-weight: 600; font-size: 13px; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .glass .t2 { font-size: 11px; opacity: .85; text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .desks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  .desk .cap { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: rgba(255,255,255,.85); }
+
+  @keyframes breathe { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.025, .975); } }
+  @keyframes blink { 0%, 92%, 100% { transform: scaleY(1); } 95% { transform: scaleY(.1); } }
+  @keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-1px); } }
+  .hero .m-all { animation: breathe 3.2s ease-in-out infinite; transform-origin: 16px 29px; }
+  .hero .m-eye { animation: blink 4.6s ease-in-out infinite; transform-box: fill-box; transform-origin: center; }
+  .hero .m-float { animation: float 2.6s ease-in-out infinite; }
+  @media (prefers-reduced-motion: reduce) { .hero * { animation: none !important; } }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gesture mascot: clean and smooth</h1>
+  <p class="lede">Smooth forms, soft gradient shading, no outlines, in the finish of a polished vinyl toy or an
+    Apple illustration. Three directions, each tied to Gesture, with the same five moments as before and the
+    real size in the glass island.</p>
+  <div id="concepts"></div>
+</main>
+
+<script>
+let uid = 0;
+
+// Shared, clean parts: glossy capsule eyes with a catch-light, soft arcs for
+// closed and happy eyes, and small rounded hands in the body's own gradient.
+function eyes({ mode = 'open', look = 0, color = '#221d3a', y = 15.2, gap = 3.6, tall = 4.6, w = 2.7, glow = false }) {
+  const xs = [16 - gap, 16 + gap];
+  return xs.map((x, i) => {
+    if (mode === 'closed') return `<path d="M${x - 1.8} ${y + 0.6} Q${x} ${y + 1.9} ${x + 1.8} ${y + 0.6}" stroke="${color}" stroke-width="1.3" fill="none" stroke-linecap="round"/>`;
+    if (mode === 'happy' || (mode === 'wink' && i === 1)) return `<path d="M${x - 1.7} ${y + 0.9} Q${x} ${y - 1.2} ${x + 1.7} ${y + 0.9}" stroke="${color}" stroke-width="1.4" fill="none" stroke-linecap="round"/>`;
+    if (mode === 'sad') return `<path d="M${x - 1.6} ${y - 0.4 + (i ? 0 : 0.9)} L${x + 1.6} ${y - 0.4 + (i ? 0.9 : 0)}" stroke="${color}" stroke-width="1.35" stroke-linecap="round"/>`;
+    const lx = x + look * 0.9;
+    return `<g class="m-eye"><rect x="${lx - w / 2}" y="${y - tall / 2}" width="${w}" height="${tall}" rx="${w / 2}" fill="${color}"${glow ? ' filter="url(#GLOW)"' : ''}/>
+      ${glow ? '' : `<circle cx="${lx + 0.45}" cy="${y - tall / 2 + 1.1}" r=".55" fill="#fff" opacity=".95"/>`}</g>`;
+  }).join('');
+}
+
+function hands(set, fill) {
+  const h = (x, y, r) => `<rect x="${x - 1.9}" y="${y - 2.6}" width="3.8" height="5.2" rx="1.9" fill="${fill}" transform="rotate(${r} ${x} ${y})"/>`;
+  return {
+    cover: h(12.4, 15.2, 78) + h(19.6, 15.2, -78),
+    ok: h(27, 14, -20) + `<circle cx="28" cy="10" r="1.7" fill="none" stroke="${fill}" stroke-width="1.4"/>`,
+    shrug: h(4, 13.6, -38) + h(28, 13.6, 38),
+  }[set] ?? '';
+}
+
+// ------------------------------------------------------------ L: Jelly
+function jelly({ eye = 'open', look = 0.4, hand = null, id }) {
+  return `<defs>
+      <radialGradient id="${id}-b" cx="34%" cy="26%" r="85%"><stop offset="0" stop-color="#ffd2a8"/><stop offset=".45" stop-color="#ff9a86"/><stop offset="1" stop-color="#ee5487"/></radialGradient>
+      <radialGradient id="${id}-shade" cx="50%" cy="100%" r="70%"><stop offset="0" stop-color="#b8306a" stop-opacity=".45"/><stop offset="1" stop-color="#b8306a" stop-opacity="0"/></radialGradient>
+      <linearGradient id="${id}-h" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#ffb08f"/><stop offset="1" stop-color="#f36a8a"/></linearGradient>
+      <filter id="${id}-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=".9"/></filter>
+      <filter id="${id}-drop" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.1"/></filter>
+    </defs>
+    <ellipse cx="16" cy="29.2" rx="8" ry="1.3" fill="#7a2a50" opacity=".18" filter="url(#${id}-drop)"/>
+    <g class="m-all">
+      ${hand && hand !== 'cover' ? hands(hand, `url(#${id}-h)`) : ''}
+      <path d="M16 4.4 C23.6 4.4 27.8 9.4 27.8 16.6 C27.8 23.8 23.2 28 16 28 C8.8 28 4.2 23.8 4.2 16.6 C4.2 9.4 8.4 4.4 16 4.4 Z" fill="url(#${id}-b)"/>
+      <path d="M16 4.4 C23.6 4.4 27.8 9.4 27.8 16.6 C27.8 23.8 23.2 28 16 28 C8.8 28 4.2 23.8 4.2 16.6 C4.2 9.4 8.4 4.4 16 4.4 Z" fill="url(#${id}-shade)"/>
+      <ellipse cx="11.2" cy="9.4" rx="4.2" ry="2.4" fill="#fff" opacity=".55" transform="rotate(-28 11.2 9.4)" filter="url(#${id}-soft)"/>
+      <circle cx="10.6" cy="8.8" r=".9" fill="#fff" opacity=".9"/>
+      <ellipse cx="10.4" cy="19.2" rx="2.1" ry="1.2" fill="#ff5f8e" opacity=".45" filter="url(#${id}-soft)"/>
+      <ellipse cx="21.6" cy="19.2" rx="2.1" ry="1.2" fill="#ff5f8e" opacity=".45" filter="url(#${id}-soft)"/>
+      ${hand === 'cover' ? '' : eyes({ mode: eye, look, y: 15.6 })}
+      ${eye === 'closed' || hand === 'cover' ? '' : `<path d="M14.6 20.2 Q16 21.4 17.4 20.2" stroke="#3b1a33" stroke-width="1.1" fill="none" stroke-linecap="round"/>`}
+      ${hand === 'cover' ? hands('cover', `url(#${id}-h)`) : ''}
+    </g>`;
+}
+
+// ------------------------------------------------------------ M: Droplet
+function droplet({ eye = 'open', look = 0.4, hand = null, id }) {
+  return `<defs>
+      <linearGradient id="${id}-b" x1=".2" y1="0" x2=".8" y2="1"><stop offset="0" stop-color="#9ff3ff"/><stop offset=".45" stop-color="#6aa6ff"/><stop offset="1" stop-color="#9a6bff"/></linearGradient>
+      <radialGradient id="${id}-core" cx="55%" cy="70%" r="55%"><stop offset="0" stop-color="#ffffff" stop-opacity=".55"/><stop offset="1" stop-color="#ffffff" stop-opacity="0"/></radialGradient>
+      <linearGradient id="${id}-h" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8fd8ff"/><stop offset="1" stop-color="#8a7dff"/></linearGradient>
+      <filter id="${id}-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=".7"/></filter>
+      <filter id="${id}-drop" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="1.1"/></filter>
+    </defs>
+    <ellipse cx="16" cy="29.4" rx="7.4" ry="1.2" fill="#3a3f9a" opacity=".2" filter="url(#${id}-drop)"/>
+    <g class="m-all m-float">
+      ${hand && hand !== 'cover' ? hands(hand, `url(#${id}-h)`) : ''}
+      <path d="M16 3.4 C17.6 6 26.4 13.4 26.4 19.6 C26.4 25.2 21.8 28.8 16 28.8 C10.2 28.8 5.6 25.2 5.6 19.6 C5.6 13.4 14.4 6 16 3.4 Z" fill="url(#${id}-b)" opacity=".96"/>
+      <path d="M16 3.4 C17.6 6 26.4 13.4 26.4 19.6 C26.4 25.2 21.8 28.8 16 28.8 C10.2 28.8 5.6 25.2 5.6 19.6 C5.6 13.4 14.4 6 16 3.4 Z" fill="url(#${id}-core)"/>
+      <path d="M9.4 15.6 Q10.4 11.4 13.6 8.6" stroke="#fff" stroke-width="1.6" stroke-linecap="round" fill="none" opacity=".75" filter="url(#${id}-soft)"/>
+      <path d="M19.6 26.6 Q23.6 25 24.6 21" stroke="#e8fbff" stroke-width="1.1" stroke-linecap="round" fill="none" opacity=".8"/>
+      <circle cx="11" cy="20.6" r=".8" fill="#fff" opacity=".8"/>
+      ${hand === 'cover' ? '' : eyes({ mode: eye, look, y: 18.2, color: '#1d1a4a' })}
+      ${eye === 'closed' || hand === 'cover' ? '' : `<path d="M14.8 22.6 Q16 23.6 17.2 22.6" stroke="#1d1a4a" stroke-width="1" fill="none" stroke-linecap="round"/>`}
+      ${hand === 'cover' ? hands('cover', `url(#${id}-h)`).replaceAll('15.2', '18.2') : ''}
+    </g>`;
+}
+
+// ------------------------------------------------------------ N: Glow orb
+function orb({ eye = 'open', look = 0.4, hand = null, dim = false, id }) {
+  return `<defs>
+      <radialGradient id="${id}-a" cx="30%" cy="30%" r="75%"><stop offset="0" stop-color="#8fe8ff"/><stop offset=".5" stop-color="#4f86ff" stop-opacity=".9"/><stop offset="1" stop-color="#4f86ff" stop-opacity="0"/></radialGradient>
+      <radialGradient id="${id}-b" cx="75%" cy="75%" r="70%"><stop offset="0" stop-color="#ff6fb5"/><stop offset=".55" stop-color="#a06bff" stop-opacity=".85"/><stop offset="1" stop-color="#a06bff" stop-opacity="0"/></radialGradient>
+      <radialGradient id="${id}-base" cx="50%" cy="50%" r="50%"><stop offset="0" stop-color="#7a74ff"/><stop offset="1" stop-color="#5a4fe0"/></radialGradient>
+      <linearGradient id="${id}-h" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#8a9cff"/><stop offset="1" stop-color="#c26bff"/></linearGradient>
+      <filter id="${id}-halo" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="2.2"/></filter>
+      <filter id="${id}-soft" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation=".8"/></filter>
+      <filter id="GLOW" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation=".45" result="b"/><feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge></filter>
+    </defs>
+    <g class="m-all" opacity="${dim ? 0.55 : 1}">
+      <circle cx="16" cy="16.4" r="12.6" fill="#8b6bff" opacity=".35" filter="url(#${id}-halo)"/>
+      ${hand && hand !== 'cover' ? hands(hand, `url(#${id}-h)`) : ''}
+      <circle cx="16" cy="16.4" r="11.8" fill="url(#${id}-base)"/>
+      <circle cx="16" cy="16.4" r="11.8" fill="url(#${id}-a)"/>
+      <circle cx="16" cy="16.4" r="11.8" fill="url(#${id}-b)"/>
+      <ellipse cx="11.8" cy="10.4" rx="4" ry="2.2" fill="#fff" opacity=".5" transform="rotate(-30 11.8 10.4)" filter="url(#${id}-soft)"/>
+      ${hand === 'cover' ? '' : eyes({ mode: eye, look, y: 16, color: '#ffffff', glow: true, w: 2.5, tall: 5 })}
+      ${hand === 'cover' ? hands('cover', `url(#${id}-h)`) : ''}
+    </g>`;
+}
+
+const svg = (draw, size, o = {}) => {
+  uid += 1;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" aria-hidden="true" overflow="visible">${draw({ ...o, id: `m${uid}` })}</svg>`;
+};
+
+const MOMENTS = (extra = {}) => [
+  [{ look: 0.6, ...extra }, 'At rest', 'looking at your screen'],
+  [{ hand: 'cover', ...extra }, 'Camera off', 'covers its eyes'],
+  [{ eye: 'wink', hand: 'ok', ...extra }, 'OK → armed', 'a wink and an OK'],
+  [{ eye: 'sad', hand: 'shrug', look: -0.5, ...extra }, 'Refused', 'a shrug'],
+  [{ eye: 'closed', ...extra, dim: true }, 'Disarmed', 'eyes shut, resting'],
+];
+
+const CONCEPTS = [
+  { key: 'L', name: 'Jelly', draw: jelly, idea: 'Soft, warm, friendly',
+    story: 'A soft jelly bean in a peach-to-pink gradient, with glossy capsule eyes, a blush and a catch-light. The finish of a vinyl toy, in the warm colours of your references. Little rounded hands slide out for the gestures, and it squashes softly as it breathes.',
+    states: MOMENTS() },
+  { key: 'M', name: 'Droplet', draw: droplet, idea: 'Made of liquid glass',
+    story: 'A drop of the same liquid glass as the island it lives in, aqua to violet, with a bright refraction line and a caustic glint underneath. The mascot and its home are one material, so the whole orb feels like a single object. It floats a little.',
+    states: MOMENTS() },
+  { key: 'N', name: 'Glow orb', draw: orb, idea: 'Your first idea, made into a face',
+    story: 'The "small ball like the Gemini icon" from your first message, given a face: a glowing gradient sphere, blue to violet to pink, with soft white capsule eyes that light up like Siri’s. The cleanest of the three, and the most "Apple". It dims when disarmed.',
+    states: MOMENTS() },
+];
+
+document.getElementById('concepts').innerHTML = CONCEPTS.map((c) => `
+  <section class="concept">
+    <div class="hero">${svg(c.draw, 156, c.states[0][0])}<h2>${c.key}. ${c.name}</h2><p>${c.idea}</p></div>
+    <div>
+      <p class="story">${c.story}</p>
+      <div class="states">${c.states.map(([s, b, t]) => `<div class="state">${svg(c.draw, 54, s)}<b>${b}</b><span>${t}</span></div>`).join('')}</div>
+      <div class="desks">
+        <div class="desk"><div class="menubar"><span>  Finder  File  Edit</span><span>Wi‑Fi  10:42</span></div>
+          <div class="glass tab">${svg(c.draw, 24, c.states[0][0])}</div><span class="cap">At rest: 24 px in the glass island</span></div>
+        <div class="desk calm"><div class="menubar"><span>  Notes</span><span>10:42</span></div>
+          <div class="glass pill">${svg(c.draw, 34, c.states[2][0])}<div><div class="t1">OK sign → armed</div><div class="t2">Ready</div></div></div>
+          <span class="cap">Saying something: 34 px</span></div>
+      </div>
+    </div>
+  </section>`).join('');
+</script>
+</body>
+</html>

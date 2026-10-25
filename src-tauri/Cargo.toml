@@ -11,12 +11,28 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
+# Compiles and links the orb's SwiftUI island (island/). Already in the build
+# through tauri; this turns on its build-script half.
+swift-rs = { version = "1", features = ["build"] }
 
 [dependencies]
-# image-png: decoding the menu-bar icon from an embedded PNG at startup.
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+# macos-private-api: a see-through window, which the orb is drawn in.
+tauri = { version = "2", features = ["macos-private-api"] }
 tauri-plugin-autostart = "2"
-tauri-plugin-shell = "2"
+# Turns the orb's window into a panel that never takes focus from your app.
+tauri-nspanel = "2.1"
+# Reading the orb's state from the server. Already in the build through tauri;
+# named here because this crate uses it directly.
+serde_json = "1"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+# Hiding, showing and quitting the engine's Chrome. Already in the build through
+# tauri; named for the one class this crate uses itself. Default features off:
+# they would compile every AppKit class.
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSRunningApplication", "NSResponder", "NSWindow", "NSPanel", "libc"] }
+# dlopen and dlsym, for the private SkyLight calls that keep the orb still
+# across desktops. Already in the build through objc2-app-kit.
+libc = "0.2"
 
 [profile.release]
 codegen-units = 1

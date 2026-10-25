@@ -3,6 +3,7 @@
 // This process can press any key on the machine, so the exposed surface is kept
 // deliberately narrow. See SECURITY below.
 
+import fs from 'node:fs';
 import path from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
@@ -10,13 +11,17 @@ import { fileURLToPath } from 'node:url';
 import express from 'express';
 
 import { resolveBackend } from './backends/index.js';
-import { ConfigStore } from './config.js';
-import { readSpaceHotkeys, readSpaces, responsibleApp, windowServerSpaces } from './macos.js';
-import { ACCESSIBILITY_HELP, accessibilityHelpFor, checkAccessibility } from './permissions.js';
+import { ConfigStore, applyBindingEdit, configVersion, validate, writeConfig } from './config.js';
+import { readSpaceHotkeys, readSpaces, responsibleApp, windowServerSpaces, windowServerSpacesAsync } from './macos.js';
+import { appendRecord, experimentsDir, MAX_RECORD_BYTES, validateRecord } from './experiments.js';
+import { OrbHub, readCameraState, readMascot } from './orb-hub.js';
+import { accessibilityHelpFor, checkAccessibility } from './permissions.js';
+import { focusScreen, listDisplays } from './screens.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const CONFIG_PATH = process.env.GESTURE_CONFIG ?? path.join(ROOT, 'config.json');
+const EXPERIMENTS_DIR = experimentsDir({ root: ROOT });
 
 // Loopback only. Binding 0.0.0.0 would let anything on the local network press
 // keys on this machine.
@@ -55,6 +60,7 @@ const lastFired = new Map();
 
 config.onChange(() => {
   lastFired.clear();
+  orb.configChanged();
   const bindings = Object.entries(config.current.gestures)
     .map(([name, g]) => `${name} -> ${g.combo}`)
     .join(', ');
@@ -63,7 +69,14 @@ config.onChange(() => {
 
 const app = express();
 app.disable('x-powered-by');
-app.use(express.json({ limit: '4kb' }));
+
+// 4 kB is plenty for every route that acts. Only result records are bigger —
+// a facing trial carries its head trace — so only that route gets more, and
+// it is chosen here rather than by route order, where a later route's own
+// limit would never be reached past this one.
+const smallJson = express.json({ limit: '4kb' });
+const recordJson = express.json({ limit: MAX_RECORD_BYTES });
+app.use((req, res, next) => (req.path === '/experiment' ? recordJson : smallJson)(req, res, next));
 
 /**
  * SECURITY: reject cross-origin requests.
@@ -80,24 +93,30 @@ app.use(express.json({ limit: '4kb' }));
  *    cross-origin without a CORS preflight that we never answer.
  */
 function sameOriginOnly(req, res, next) {
-  const origin = req.get('origin');
-  if (origin) {
-    let hostname;
-    try {
-      hostname = new URL(origin).hostname;
-    } catch {
-      return res.status(403).json({ ok: false, error: 'bad origin' });
-    }
-    if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '[::1]') {
-      return res.status(403).json({ ok: false, error: 'cross-origin requests are not allowed' });
-    }
-  }
+  const refused = originProblem(req);
+  if (refused) return res.status(403).json({ ok: false, error: refused });
 
   if (!req.is('application/json')) {
     return res.status(415).json({ ok: false, error: 'expected Content-Type: application/json' });
   }
 
   return next();
+}
+
+/** Why a request's Origin is refused, or null when it is loopback or absent. */
+function originProblem(req) {
+  const origin = req.get('origin');
+  if (!origin) return null;
+  let hostname;
+  try {
+    hostname = new URL(origin).hostname;
+  } catch {
+    return 'bad origin';
+  }
+  if (hostname !== '127.0.0.1' && hostname !== 'localhost' && hostname !== '[::1]') {
+    return 'cross-origin requests are not allowed';
+  }
+  return null;
 }
 
 // Long enough to catch a revert, which is the whole point of watching. A Space
@@ -108,7 +127,8 @@ function sameOriginOnly(req, res, next) {
 // It delays only the HTTP response, never the switch itself, and only for
 // Space-switching bindings.
 const SPACE_SETTLE_TIMEOUT_MS = 2000;
-const SPACE_POLL_MS = 100;
+// Each sample spawns the helper; four a second still catches a snap-back.
+const SPACE_POLL_MS = 250;
 
 /** e.g. "2/4" — position, not just identity, so a jump is distinguishable. */
 function spacePosition(state) {
@@ -144,7 +164,7 @@ async function verifySpaceMoved(before) {
 
   while (performance.now() < deadline) {
     await sleep(SPACE_POLL_MS);
-    const now = windowServerSpaces();
+    const now = await windowServerSpacesAsync();
     if (!now) continue;
     latest = now;
     if (now.active !== before.active) sawChange = true;
@@ -189,6 +209,16 @@ app.post('/heartbeat', sameOriginOnly, (req, res) => {
     msSinceFrame: typeof b.msSinceFrame === 'number' ? Math.round(b.msSinceFrame) : null,
     hasMSTP: b.hasMSTP === true,
     engine: typeof b.engine === 'string' ? b.engine : null,
+    // The last palm up / down and why it did or didn't scroll.
+    flick:
+      b.flick && typeof b.flick === 'object'
+        ? {
+            dir: String(b.flick.dir ?? '').slice(0, 8),
+            verdict: String(b.flick.verdict ?? '').slice(0, 60),
+            travel: Number.isFinite(b.flick.travel) ? b.flick.travel : null,
+            speed: Number.isFinite(b.flick.speed) ? b.flick.speed : null,
+          }
+        : null,
   });
   res.json({ ok: true });
 });
@@ -233,6 +263,214 @@ app.get('/recent', (_req, res) => {
   res.json({ now: new Date().toISOString(), events: recent });
 });
 
+/**
+ * Append one check-up or experiment record to experiments/<date>.jsonl.
+ *
+ * Same-origin only, like every route that writes: these files are people's
+ * measurements, and nothing outside this page should be able to add to them.
+ */
+app.post('/experiment', sameOriginOnly, async (req, res) => {
+  const { record, error } = validateRecord(req.body);
+  if (error) return res.status(400).json({ ok: false, error });
+  try {
+    const { file } = await appendRecord(EXPERIMENTS_DIR, record);
+    // Short when it is in the project, whole when GESTURE_EXPERIMENTS_DIR put it elsewhere.
+    return res.json({ ok: true, file: file.startsWith(ROOT + path.sep) ? path.relative(ROOT, file) : file });
+  } catch (err) {
+    console.error(`could not save a ${record.kind} record: ${err.message}`);
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+/**
+ * The orb: its live feed, the mascot's mood, and the camera switch.
+ *
+ * The page knows the mood and runs the camera; the orb under the camera shows
+ * the mood and asks for the camera. server/orb-hub.js keeps the state between
+ * them and streams each change to both.
+ */
+const orb = new OrbHub();
+const orbTicker = setInterval(() => orb.tick(), 1000);
+orbTicker.unref();
+
+// Read-only, but a page on another site still has no business holding a
+// stream open to it, so a foreign Origin is refused like on every POST.
+app.get('/events', (req, res) => {
+  const refused = originProblem(req);
+  if (refused) return res.status(403).json({ ok: false, error: refused });
+  res.writeHead(200, {
+    'Content-Type': 'text/event-stream',
+    'Cache-Control': 'no-store',
+    Connection: 'keep-alive',
+  });
+  // How long the browser waits before reconnecting, e.g. after a server restart.
+  res.write('retry: 2000\n\n');
+  const detach = orb.attach(res, req.query.role);
+  req.on('close', detach);
+});
+
+app.get('/orb', (_req, res) => {
+  res.json(orb.snapshot());
+});
+
+app.post('/mascot', sameOriginOnly, (req, res) => {
+  const { mascot, error } = readMascot(req.body);
+  if (error) return res.status(400).json({ ok: false, error });
+  orb.setMascot(mascot);
+  return res.json({ ok: true });
+});
+
+app.post('/camera', sameOriginOnly, (req, res) => {
+  if (typeof req.body?.on !== 'boolean') {
+    return res.status(400).json({ ok: false, error: 'body must be {"on": true | false}' });
+  }
+  orb.wantCamera(req.body.on);
+  return res.json({ ok: true, engines: orb.engines });
+});
+
+app.post('/camera/state', sameOriginOnly, (req, res) => {
+  const { camera, error } = readCameraState(req.body);
+  if (error) return res.status(400).json({ ok: false, error });
+  orb.reportCamera(camera);
+  if (camera.error) remember({ type: 'camera', state: camera.state, error: camera.error });
+  return res.json({ ok: true });
+});
+
+/**
+ * The displays, for the page's calibration and desk map.
+ *
+ * Read fresh every time: plugging in or unplugging a monitor while the server
+ * runs is ordinary, and a stale list would let a gesture aim at a screen that
+ * is no longer there.
+ */
+app.get('/screens', async (_req, res) => {
+  try {
+    res.json({ ok: true, displays: await listDisplays() });
+  } catch (err) {
+    res.json({ ok: false, displays: [], error: err.message });
+  }
+});
+
+/**
+ * A gesture bound to a screen action: focus the screen you were facing.
+ *
+ * This is the one place the wire carries more than a gesture name. It carries
+ * a display id too, because only the page can see your head. That widens what a
+ * compromised page could ask for by exactly one thing — which of your own
+ * screens — and the id is checked against the displays actually connected, so
+ * the worst it can do is bring a window you already have open forward.
+ */
+async function screenAction(req, res, name, binding) {
+  const { settings } = config.current;
+  const screen = req.body?.screen;
+  const action = binding.combo;
+
+  if (!Number.isInteger(screen) || screen <= 0) {
+    return res.status(400).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: `"${binding.combo}" needs the screen you were facing: {"gesture": "${name}", "screen": <display id>}`,
+    });
+  }
+
+  const slot = name;
+  const now = performance.now();
+  const waited = now - (lastFired.get(slot) ?? -Infinity);
+  if (waited < settings.cooldownMs) {
+    remember({ type: 'gesture', gesture: name, action, outcome: 'cooldown' });
+    return res.status(429).json({
+      ok: true,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      reason: 'cooldown',
+      retryInMs: Math.ceil(settings.cooldownMs - waited),
+    });
+  }
+  lastFired.set(slot, now);
+
+  let display;
+  try {
+    display = (await listDisplays()).find((d) => d.id === screen);
+  } catch (err) {
+    lastFired.delete(slot);
+    return res.status(500).json({ ok: false, fired: false, gesture: name, shortcut: action, error: err.message });
+  }
+  if (!display) {
+    lastFired.delete(slot);
+    return res.status(404).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: `display ${screen} is not connected — calibrate your screens again`,
+    });
+  }
+
+  if (settings.dryRun) {
+    remember({ type: 'gesture', gesture: name, action, screen: display.name, outcome: 'dryRun' });
+    console.log(`[dry-run] ${name} -> ${action} (${display.name})`);
+    return res.json({
+      ok: true,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      screen: display.name,
+      reason: 'dryRun',
+    });
+  }
+
+  const access = await checkAccessibility();
+  if (access.granted === false) {
+    lastFired.delete(slot);
+    remember({ type: 'gesture', gesture: name, action, outcome: 'accessibility-denied' });
+    return res.status(503).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: 'macOS is refusing window control: Accessibility access is not granted',
+      help: accessibilityHelpFor(owner),
+    });
+  }
+
+  try {
+    const options = { movePointer: settings.screenMovesPointer };
+    const result = await focusScreen(screen, options);
+    const what = result.app ? `${result.app}${result.window ? ` — ${result.window}` : ''}` : 'no window';
+    const effect = result.reason ? ` (${result.reason})` : '';
+    remember({ type: 'gesture', gesture: name, action, screen: display.name, outcome: 'done', app: result.app ?? null });
+    console.log(`${name} -> ${action}  ${display.name}: ${what}${effect}`);
+    return res.json({
+      ok: true,
+      fired: true,
+      gesture: name,
+      shortcut: action,
+      screen: display.name,
+      app: result.app ?? null,
+      window: result.window ?? null,
+      // Did anything actually change? A pinch at an empty desktop succeeds and
+      // does nothing, and the page says which.
+      changed: result.focused === true,
+      reason: result.reason ?? null,
+    });
+  } catch (err) {
+    lastFired.delete(slot);
+    remember({ type: 'gesture', gesture: name, action, outcome: 'error', error: err.message });
+    console.error(`${name} -> ${action} failed: ${err.message}`);
+    return res.status(err.notTrusted ? 503 : 500).json({
+      ok: false,
+      fired: false,
+      gesture: name,
+      shortcut: action,
+      error: err.message,
+      ...(err.notTrusted ? { help: accessibilityHelpFor(owner) } : {}),
+    });
+  }
+}
+
 app.post('/gesture', sameOriginOnly, async (req, res) => {
   const { gestures, settings } = config.current;
   const name = req.body?.gesture;
@@ -267,6 +505,8 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
       error: `"${binding.combo}" is a client-side action; the page performs it, the server does not`,
     });
   }
+
+  if (binding.screen) return screenAction(req, res, name, binding);
 
   // performance.now(), not Date.now(): this clock only ever moves forward. Wall
   // clock can step backwards on an NTP correction or a sleep/wake, which makes
@@ -333,37 +573,14 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   try {
     await backend.press(binding.parsed);
 
-    const space = await verifySpaceMoved(watchSpaces);
-    remember({
-      type: 'gesture',
-      gesture: name,
-      outcome: 'pressed',
-      ...(space
-        ? { space: space.moved && space.held ? 'moved' : space.moved ? 'reverted' : 'no-move' }
-        : {}),
-    });
-    if (space?.moved && space.held) {
-      console.log(`${name} -> ${binding.combo}  (space ${space.from} -> ${space.to})`);
-    } else if (space?.moved) {
-      // Distinct from both success and failure: the switch happened and macOS
-      // undid it. Nothing about the gesture, the binding or the send is wrong.
-      console.log(`${name} -> ${binding.combo}`);
-      console.log(`  !! the desktop moved and then snapped back to ${space.to}.`);
-      console.log('  !! macOS pulls the Space back when keyboard focus stays with an app');
-      console.log(`  !! on the Space you left. Try a different "spaceStrategy" than`);
-      console.log(`  !! "${backend.spaceStrategy}" in config.json.`);
-    } else if (space) {
-      // The whole point of this branch: separate "the key was never sent" from
-      // "the key was sent and macOS ignored it". Only the second one is true
-      // here, and it rules out the detector, the cooldown and the binding.
-      console.log(`${name} -> ${binding.combo}`);
-      console.log(`  !! sent, but the desktop did not move — still on ${space.to}.`);
-      console.log(`  !! The press itself succeeded, so this is not the gesture detector,`);
-      console.log(`  !! not the cooldown and not the binding. backend=${backend.name}` +
-        `${backend.keysendSource ? ` source=${backend.keysendSource}` : ''}`);
-      console.log('  !! Next: stop the server and run "npm run probe:keysend" from this');
-      console.log('  !! same app, which reports which send method moves a Space.');
+    // Answered now, checked after. The desktop is watched for two seconds, to
+    // catch macOS pulling it back; holding the answer that long made the
+    // feedback for a swipe arrive two seconds after the desktop had moved.
+    // Only a switch that failed is said, through the orb's feed.
+    if (watchSpaces) {
+      verifySpaceMoved(watchSpaces).then((space) => reportSpace(name, binding.combo, space));
     } else {
+      remember({ type: 'gesture', gesture: name, outcome: 'pressed' });
       console.log(`${name} -> ${binding.combo}`);
     }
 
@@ -373,14 +590,6 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
       gesture: name,
       shortcut: binding.combo,
       backend: backend.name,
-      ...(space
-        ? {
-            spaceChanged: space.moved && space.held,
-            spaceReverted: space.moved && !space.held,
-            spaceFrom: space.from,
-            spaceTo: space.to,
-          }
-        : {}),
     });
   } catch (err) {
     remember({ type: 'gesture', gesture: name, outcome: 'error', error: err.message });
@@ -396,9 +605,107 @@ app.post('/gesture', sameOriginOnly, async (req, res) => {
   }
 });
 
+/** How a desktop switch went, in the log, the diagnostics and, if it failed, the orb. */
+function reportSpace(name, combo, space) {
+  remember({
+    type: 'gesture',
+    gesture: name,
+    outcome: 'pressed',
+    ...(space ? { space: space.moved && space.held ? 'moved' : space.moved ? 'reverted' : 'no-move' } : {}),
+  });
+  if (space && !(space.moved && space.held)) {
+    orb.problem(space.moved ? 'The desktop moved, then macOS moved it back' : "The desktop didn't move");
+  }
+  if (space?.moved && space.held) {
+    console.log(`${name} -> ${combo}  (space ${space.from} -> ${space.to})`);
+  } else if (space?.moved) {
+    // Distinct from both success and failure: the switch happened and macOS
+    // undid it. Nothing about the gesture, the binding or the send is wrong.
+    console.log(`${name} -> ${combo}`);
+    console.log(`  !! the desktop moved and then snapped back to ${space.to}.`);
+    console.log('  !! macOS pulls the Space back when keyboard focus stays with an app');
+    console.log(`  !! on the Space you left. Try a different "spaceStrategy" than`);
+    console.log(`  !! "${backend.spaceStrategy}" in config.json.`);
+  } else if (space) {
+    // The whole point of this branch: separate "the key was never sent" from
+    // "the key was sent and macOS ignored it". Only the second one is true
+    // here, and it rules out the detector, the cooldown and the binding.
+    console.log(`${name} -> ${combo}`);
+    console.log(`  !! sent, but the desktop did not move — still on ${space.to}.`);
+    console.log(`  !! The press itself succeeded, so this is not the gesture detector,`);
+    console.log(`  !! not the cooldown and not the binding. backend=${backend.name}` +
+      `${backend.keysendSource ? ` source=${backend.keysendSource}` : ''}`);
+    console.log('  !! Next: stop the server and run "npm run probe:keysend" from this');
+    console.log('  !! same app, which reports which send method moves a Space.');
+  } else {
+    console.log(`${name} -> ${combo}`);
+  }
+}
+
 app.get('/config', (req, res) => {
   rememberFetch('config', req);
   res.json(config.clientPayload());
+});
+
+/**
+ * Change what gestures do, from the Gestures view.
+ *
+ * Same-origin, and limited to EDITABLE_ACTIONS — see config.js for why that
+ * list is the safety boundary. The edit names the file version it was based
+ * on: if config.json changed on disk since (a hand edit, say), the edit is
+ * refused rather than quietly overwriting it.
+ */
+app.post('/config/gestures', sameOriginOnly, async (req, res) => {
+  const { version, edits } = req.body ?? {};
+
+  let text;
+  try {
+    text = await fs.promises.readFile(CONFIG_PATH, 'utf8');
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: `could not read config.json: ${err.message}` });
+  }
+  if (version !== configVersion(text)) {
+    return res.status(409).json({
+      ok: false,
+      error: 'config.json changed on disk since this page loaded it',
+      config: config.clientPayload(),
+    });
+  }
+
+  let raw;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    return res.status(400).json({ ok: false, errors: ['config.json is not valid JSON — fix it by hand first'] });
+  }
+
+  const edited = applyBindingEdit(raw, edits);
+  if (edited.errors) return res.status(400).json({ ok: false, errors: edited.errors });
+  try {
+    validate(edited.raw);
+  } catch (err) {
+    return res.status(400).json({ ok: false, errors: [err.message] });
+  }
+
+  try {
+    await writeConfig(CONFIG_PATH, edited.raw);
+    config.load();
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: `could not save config.json: ${err.message}` });
+  }
+
+  // Valid is not the same as pressable: the backend chosen at startup may not
+  // be able to send a newly chosen key (osascript has no media keys).
+  const warnings = Object.keys(edits)
+    .map((name) => [name, config.current.gestures[name]])
+    .filter(([, binding]) => binding?.parsed && typeof backend.supports === 'function' && !backend.supports(binding.parsed))
+    .map(([name, binding]) => `the ${backend.name} backend cannot press ${binding.combo}, so ${name} won't work until it's changed`);
+
+  for (const [name, combo] of Object.entries(edits)) {
+    console.log(`config: ${name} -> ${combo ?? '(unbound)'}  (changed on the Gestures page)`);
+  }
+  remember({ type: 'config', edits });
+  return res.json({ ok: true, config: config.clientPayload(), warnings });
 });
 
 app.get('/health', async (_req, res) => {
@@ -441,6 +748,24 @@ const SPACE_SWITCH_COMBOS = new Set([
   'ctrl+left',
   'ctrl+right',
 ]);
+
+/** At startup: which screens a screen binding can reach, or why it can't. */
+async function screenPreflight() {
+  const bound = Object.entries(config.current.gestures).filter(([, g]) => g.screen);
+  if (bound.length === 0) return;
+
+  const names = bound.map(([name, g]) => `${name} -> ${g.combo}`).join(', ');
+  try {
+    const displays = await listDisplays();
+    console.log(`  Screens (${names}): ${displays.map((d) => d.name).join(', ')}`);
+    if (displays.length < 2) {
+      console.log('  Only one screen is connected, so a pinch always lands on it.');
+    }
+  } catch (err) {
+    console.log(`  !! ${names} cannot act on screens: ${err.message}`);
+  }
+  console.log('');
+}
 
 /**
  * Say out loud, at startup, the things that otherwise get guessed at.
@@ -566,6 +891,7 @@ const server = app.listen(port, HOST, () => {
   console.log('');
 
   preflight();
+  screenPreflight();
 
   config.watch();
 });
@@ -573,6 +899,8 @@ const server = app.listen(port, HOST, () => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
     config.close();
+    // Open event streams would otherwise hold the close up indefinitely.
+    orb.close();
     server.close(() => process.exit(0));
   });
 }
@@ -591,6 +919,7 @@ if (Number.isInteger(parentPid) && parentPid > 1) {
       console.log(`parent process ${parentPid} is gone; shutting down`);
       clearInterval(watchdog);
       config.close();
+      orb.close();
       server.close(() => process.exit(0));
       // A lingering request must not keep the zombie alive.
       setTimeout(() => process.exit(0), 2000).unref();

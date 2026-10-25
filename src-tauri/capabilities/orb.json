@@ -1,0 +1,10 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "orb",
+  "description": "The orb's page may call this app's four orb commands and nothing else. It is loaded from the local server, so IPC is opened to that one origin and that one window. No Tauri plugin permission is granted: the page cannot open files, run commands or touch other windows.",
+  "windows": ["orb"],
+  "remote": {
+    "urls": ["http://127.0.0.1:4321/*"]
+  },
+  "permissions": ["allow-orb-view", "allow-orb-menu", "allow-open-settings", "allow-hide-settings"]
+}

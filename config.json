@@ -1,22 +1,27 @@
 {
   "gestures": {
-    "fist": "audio_play",
-    "pinch": "toggle_armed",
-    "open_palm": "cmd+ctrl+q",
+    "ok_sign": "toggle_armed",
+    "pinch": "focus_screen",
     "swipe_left": "space_right",
-    "swipe_right": "space_left"
-    
+    "swipe_right": "space_left",
+    "shh": "cmd+shift+a",
+    "swipe_up": "pagedown",
+    "swipe_down": "pageup",
+    "fist": "cmd+ctrl+q",
+    "open_palm": "audio_play"
   },
   "holdMs": {
     "default": 180,
-    "open_palm": 1200
+    "open_palm": 1200,
+    "ok_sign": 500,
+    "shh": 400
   },
   "cooldownMs": 1200,
   "requireReleaseBetweenFires": true,
   "stillnessMaxVelocity": 0.8,
   "swipeWindowMs": 350,
   "swipeMinTravel": 1.2,
-  "swipeMinVelocity": 3.0,
+  "swipeMinVelocity": 3,
   "swipeMaxVerticalRatio": 0.5,
   "swipeRearmRequiresPoseBreak": true,
   "invertSwipeDirection": false,
@@ -28,6 +33,8 @@
   "dockSwipeLingerMs": 300,
   "dockSwipeWithTap": true,
   "verifySpaceSwitch": true,
+  "screenMaxAngle": 20,
+  "screenMovesPointer": true,
   "dryRun": false,
   "port": 4321
 }

@@ -1,11 +1,17 @@
-node_modules/
+# No trailing slash: a worktree links node_modules from the main checkout, and
+# a symlink is not a directory to git.
+node_modules
 
 # Local machine state, not project config
 .claude/settings.local.json
 
 # Vendored MediaPipe, ~31 MB all told — fetch with `npm run fetch-model`
 public/models/*.task
+public/models/*.tflite
 public/vendor/
+
+# Clips played into the Lab with ?labclip= while developing without a camera
+public/lab-clips/
 
 # Compiled Swift key-sending helper — build with `npm run build:native`
 native/build/
@@ -16,6 +22,9 @@ npm-debug.log*
 
 # Written by scripts/keysend-probe.mjs
 probe-result.json
+
+# Check-up and experiment results — people's own measurements, never committed
+experiments/
 
 # Tauri
 src-tauri/target/

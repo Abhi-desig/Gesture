@@ -1,0 +1,278 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot: liquid morph</title>
+<style>
+  :root { --bg: #f3f2f6; --panel: #fff; --text: #1b1b1f; --dim: #6b6b72; --line: #e6e4ec; }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif; }
+  main { max-width: 980px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  .lede { color: var(--dim); margin: 0 0 18px; max-width: 72ch; }
+  .stage { display: grid; grid-template-columns: minmax(0, 1fr); justify-items: center; gap: 10px;
+    background: radial-gradient(70% 80% at 50% 35%, #ffffff 0%, #ecebf3 100%); border: 1px solid var(--line);
+    border-radius: 20px; padding: 26px 16px 18px; }
+  .now { font-weight: 600; font-size: 15px; min-height: 22px; }
+  .controls { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; }
+  .controls button { font: inherit; font-size: 12.5px; border: 1px solid var(--line); background: #fff; border-radius: 999px;
+    padding: 5px 12px; cursor: pointer; }
+  .controls button[aria-pressed="true"] { background: #1b1b1f; color: #fff; border-color: #1b1b1f; }
+  h2 { font-size: 13px; letter-spacing: .05em; text-transform: uppercase; color: var(--dim); margin: 26px 0 10px; }
+  .frames { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 10px; }
+  .frame { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 10px 6px 8px;
+    display: grid; justify-items: center; gap: 2px; }
+  .frame b { font-size: 12px; } .frame span { font-size: 11px; color: var(--dim); }
+
+  .desks { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+  @media (max-width: 640px) { .desks { grid-template-columns: 1fr; } }
+  .desk { position: relative; height: 120px; border-radius: 14px; overflow: hidden;
+    background: radial-gradient(120% 140% at 15% 0%, #ff9f6e 0%, #e2557e 38%, #6a4fd0 72%, #2a2d6e 100%); }
+  .desk.calm { background: radial-gradient(120% 140% at 80% 0%, #bfe3ff 0%, #7fb2e8 40%, #3f6fb5 75%, #1d3466 100%); }
+  .desk.light { background: radial-gradient(120% 140% at 50% 0%, #fdfbf7 0%, #efe9e0 60%, #d9d2c6 100%); }
+  .menubar { position: absolute; inset: 0 0 auto; height: 24px; display: flex; justify-content: space-between;
+    padding: 0 12px; align-items: center; font-size: 12px; font-weight: 600; color: rgba(255,255,255,.92);
+    text-shadow: 0 1px 2px rgba(0,0,0,.25); }
+  .desk.light .menubar { color: rgba(0,0,0,.8); text-shadow: none; }
+  .glass { position: absolute; top: 3px; left: 50%; transform: translateX(-50%); display: flex; align-items: center;
+    gap: 8px; color: #fff; white-space: nowrap;
+    background: linear-gradient(180deg, rgba(255,255,255,.34), rgba(255,255,255,.12));
+    -webkit-backdrop-filter: blur(18px) saturate(180%); backdrop-filter: blur(18px) saturate(180%);
+    border: 1px solid rgba(255,255,255,.5);
+    box-shadow: inset 0 1px 0 rgba(255,255,255,.6), inset 0 -6px 12px rgba(255,255,255,.12), 0 6px 18px rgba(20,10,40,.25); }
+  .desk.light .glass { color: #1b1b1f; background: linear-gradient(180deg, rgba(255,255,255,.7), rgba(255,255,255,.4));
+    border-color: rgba(255,255,255,.9); box-shadow: inset 0 1px 0 #fff, 0 6px 18px rgba(60,40,20,.15); }
+  .glass.tab { height: 30px; padding: 0 4px; border-radius: 15px; }
+  .glass.pill { height: 44px; padding: 0 18px 0 4px; border-radius: 22px; }
+  .glass .t1 { font-weight: 600; font-size: 13px; }
+  .glass .t2 { font-size: 11px; opacity: .8; }
+  .desk .cap { position: absolute; left: 10px; bottom: 8px; font-size: 11px; color: rgba(255,255,255,.85); }
+  .desk.light .cap { color: rgba(0,0,0,.55); }
+  .note { color: var(--dim); font-size: 12.5px; max-width: 72ch; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Liquid morph</h1>
+  <p class="lede">A drop of iridescent liquid chrome. When a gesture works, it melts into that gesture's shape,
+    holds it for a moment, and melts back into a drop. No face: the shape is the character. Below are the main
+    stage (click a gesture or let it play), every key frame, and the real size in the glass island on dark,
+    blue and light wallpapers.</p>
+
+  <section class="stage">
+    <div id="hero"></div>
+    <div class="now" id="now">Drop</div>
+    <div class="controls" id="controls"></div>
+  </section>
+
+  <h2>Key frames</h2>
+  <div class="frames" id="frames"></div>
+
+  <h2>Real size, in the glass island</h2>
+  <div class="desks">
+    <div class="desk"><div class="menubar"><span>  Finder  File  Edit</span><span>Wi‑Fi  10:42</span></div>
+      <div class="glass tab" id="tab1"></div><span class="cap">At rest: 26 px</span></div>
+    <div class="desk calm"><div class="menubar"><span>  Notes</span><span>10:42</span></div>
+      <div class="glass pill"><span id="pill1"></span><div><div class="t1">Open palm → play</div><div class="t2">Ready</div></div></div>
+      <span class="cap">Speaking: 38 px</span></div>
+    <div class="desk light"><div class="menubar"><span>  Safari  File</span><span>10:42</span></div>
+      <div class="glass tab" id="tab2"></div><span class="cap">On a light wallpaper</span></div>
+    <div class="desk light"><div class="menubar"><span>  Mail</span><span>10:42</span></div>
+      <div class="glass pill"><span id="pill2"></span><div><div class="t1">OK sign → armed</div><div class="t2">Ready</div></div></div>
+      <span class="cap">On a light wallpaper, speaking</span></div>
+  </div>
+  <p class="note">It animates only while it melts (about half a second per change), and sits still otherwise,
+    so it costs nothing at rest. With Reduce Motion on, it switches between key frames without melting.</p>
+</main>
+
+<script>
+// ------------------------------------------------------------ the shapes
+// Each shape is 14 blobs [x, y, r] in a 64×64 box. The liquid filter blurs
+// them together and sharpens the edge again, so neighbours merge like a fluid;
+// moving the blobs between shapes is what makes it melt. Blobs a shape doesn't
+// need hide inside the others.
+const N = 19;
+const pad = (list) => {
+  const out = list.slice(0, N);
+  // Spare blobs sit on top of the shape's first (largest) one, out of sight.
+  while (out.length < N) out.push(list[0]);
+  return out;
+};
+
+// Fingers are chains of three shrinking blobs, fanned out from the palm so
+// their tips stay apart while their bases melt into it.
+const SHAPES = {
+  drop: pad([
+    [32, 42, 13], [32, 38, 12], [32, 31, 9], [32, 25, 6], [32, 20, 4], [32, 16.5, 2.6],
+    [28, 43, 10], [36, 43, 10], [32, 46, 10], [30, 36, 8], [34, 36, 8], [32, 28, 7], [32, 40, 9], [32, 34, 9],
+  ]),
+  palm: pad([
+    [32, 46, 9], [28, 44, 7], [36, 44, 7], [32, 52, 6.5],
+    [25, 34, 2.9], [21, 26, 2.6], [18.5, 19.5, 2.4],         // index
+    [30.5, 32, 3], [29.5, 23.5, 2.7], [29, 16, 2.5],          // middle
+    [36.5, 32.5, 2.9], [38.5, 24.5, 2.6], [40, 17.5, 2.4],    // ring
+    [42, 36, 2.6], [46, 30, 2.4], [48.5, 25, 2.2],            // pinky
+    [22.5, 45, 3], [17, 41, 2.7], [13.5, 37, 2.4],            // thumb
+  ]),
+  ok: pad([
+    ...[0, 1, 2, 3, 4, 5, 6].map((k) => {
+      const a = (k / 7) * Math.PI * 2 - Math.PI / 2;
+      return [21.5 + 6.6 * Math.cos(a), 35.5 + 6.6 * Math.sin(a), 2.5];
+    }),                                                        // thumb and index: the ring
+    [34, 30, 2.9], [35, 22.5, 2.6], [35.5, 15.5, 2.4],         // middle
+    [40.5, 32, 2.8], [43, 25, 2.5], [45, 18.5, 2.3],           // ring finger
+    [45.5, 37, 2.5], [49.5, 31.5, 2.3],                        // pinky
+    [36, 43, 7.5], [31, 45, 6], [40, 46, 6],                   // palm
+  ]),
+  pinch: pad([
+    [38, 46, 8.5], [44, 43, 7], [33, 48, 6],                   // palm
+    [27, 44, 3], [23, 39, 2.7], [22, 33.5, 2.5],               // thumb, rising
+    [42, 34, 3], [40, 26, 2.8], [34, 21, 2.6], [27.5, 22.5, 2.5], [23.5, 28, 2.4], // index, curling over
+    [46, 35, 3], [48, 40, 3],                                  // folded fingers
+  ]),
+  swipe: pad([
+    [10, 32, 2.4], [16, 32, 2.7], [22, 32, 2.9], [28, 32, 3.1], [34, 32, 3.2], [40, 32, 3.4],
+    [47, 32, 4.6], [42.5, 25.5, 3], [38.5, 20.5, 2.4], [42.5, 38.5, 3], [38.5, 43.5, 2.4], [51, 32, 3],
+    [4.5, 32, 1.5],
+  ]),
+  fist: pad([
+    [32, 38, 11], [26, 34, 7], [38, 34, 7], [25, 42, 6.5], [39, 42, 6.5],
+    [23, 27.5, 4], [29.5, 25.5, 4.2], [36, 25.5, 4.2], [42, 27.5, 3.9], // knuckles
+    [24, 41, 3.6], [30, 42.5, 3.6], [36, 43, 3.4],
+  ]),
+  shh: pad([
+    [32, 42, 10], [32, 12.5, 2.8], [32, 18, 3], [32, 24, 3.2], [32, 29, 3.4], // one finger up
+    [26, 40, 6.5], [38, 40, 6.5], [32, 48, 7], [25, 34, 4], [39, 34, 4],
+  ]),
+  off: pad([
+    [32, 49, 6.5], [24, 49.5, 6], [40, 49.5, 6], [17, 50.5, 4.6], [47, 50.5, 4.6], [11.5, 51.5, 3], [52.5, 51.5, 3],
+    [28, 48, 6], [36, 48, 6], [20, 50, 5], [44, 50, 5], [32, 47, 5.5],
+  ]),
+  shrug: pad([
+    [32, 43, 12.5], [32, 38, 11], [26, 44, 9], [38, 44, 9], [32, 33, 8],
+    [12.5, 30, 3.6], [51.5, 30, 3.6], [15.5, 35.5, 2.4], [48.5, 35.5, 2.4], // two little drops: shoulders up
+    [32, 47, 9], [28, 40, 9], [36, 40, 9], [32, 30, 6], [32, 42, 10],
+  ]),
+};
+
+const LABELS = {
+  drop: ['Drop', 'at rest'], palm: ['Open palm', 'play / pause'], ok: ['OK sign', 'arm / disarm'],
+  pinch: ['Pinch', 'focus a screen'], swipe: ['Swipe', 'next desktop'], fist: ['Fist', 'lock screen'],
+  shh: ['Shh', 'mute'], off: ['Camera off', 'a puddle, resting'], shrug: ['Refused', 'a little shrug'],
+};
+
+// ------------------------------------------------------------ drawing
+let uid = 0;
+function liquid(size, shape, { still = false } = {}) {
+  uid += 1;
+  const id = `lq${uid}`;
+  const blobs = SHAPES[shape].map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}"/>`).join('');
+  return `<svg width="${size}" height="${size}" viewBox="0 0 64 64" aria-hidden="true" data-id="${id}">
+    <defs>
+      <linearGradient id="${id}-iri" gradientUnits="userSpaceOnUse" x1="10" y1="8" x2="54" y2="58">
+        <stop offset="0" stop-color="#fbf9ff"/>
+        <stop offset=".28" stop-color="#cbb8ff"/>
+        <stop offset=".5" stop-color="#9fe8f2"/>
+        <stop offset=".72" stop-color="#ffc4e4"/>
+        <stop offset="1" stop-color="#8f7cf2"/>
+      </linearGradient>
+      <filter id="${id}-f" x="-25%" y="-25%" width="150%" height="150%" color-interpolation-filters="sRGB">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="1.75" result="blur"/>
+        <feColorMatrix in="blur" type="matrix" values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 22 -9" result="goo"/>
+        <feGaussianBlur in="goo" stdDeviation="1.6" result="bump"/>
+        <feSpecularLighting in="bump" surfaceScale="5" specularConstant="1.05" specularExponent="24" lighting-color="#ffffff" result="spec">
+          <fePointLight x="16" y="6" z="44"/>
+        </feSpecularLighting>
+        <feComposite in="spec" in2="goo" operator="in" result="shine"/>
+        <feComposite in="goo" in2="shine" operator="arithmetic" k2="1" k3=".9" result="lit"/>
+        <feMorphology in="goo" operator="erode" radius="1.1" result="inner"/>
+        <feComposite in="goo" in2="inner" operator="out" result="edge"/>
+        <feFlood flood-color="#4e43c9" flood-opacity=".38"/>
+        <feComposite in2="edge" operator="in" result="rim"/>
+        <feMerge><feMergeNode in="lit"/><feMergeNode in="rim"/></feMerge>
+      </filter>
+    </defs>
+    <g filter="url(#${id}-f)" fill="url(#${id}-iri)">${blobs}</g>
+  </svg>`;
+}
+
+// Melt from one shape to another: each blob eases to its new place and size.
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+function morph(svg, from, to, ms = 560) {
+  const circles = [...svg.querySelectorAll('circle')];
+  const a = SHAPES[from];
+  const b = SHAPES[to];
+  if (reduceMotion) {
+    circles.forEach((c, i) => { c.setAttribute('cx', b[i][0]); c.setAttribute('cy', b[i][1]); c.setAttribute('r', b[i][2]); });
+    return Promise.resolve();
+  }
+  // A small overshoot, like a liquid settling.
+  const ease = (t) => 1 - Math.pow(1 - t, 3) + Math.sin(t * Math.PI) * 0.06;
+  return new Promise((done) => {
+    const start = performance.now();
+    const step = (now) => {
+      const t = Math.min(1, (now - start) / ms);
+      const k = ease(t);
+      circles.forEach((c, i) => {
+        // Each blob leaves a touch later than the one before: it pours rather than snaps.
+        const lag = Math.min(1, Math.max(0, (t - (i / N) * 0.18) / 0.82));
+        const kk = lag === 1 ? 1 : ease(lag);
+        c.setAttribute('cx', a[i][0] + (b[i][0] - a[i][0]) * kk);
+        c.setAttribute('cy', a[i][1] + (b[i][1] - a[i][1]) * kk);
+        c.setAttribute('r', Math.max(0.1, a[i][2] + (b[i][2] - a[i][2]) * kk));
+      });
+      if (t < 1) requestAnimationFrame(step);
+      else done();
+    };
+    requestAnimationFrame(step);
+    void k;
+  });
+}
+
+// ------------------------------------------------------------ the page
+const hero = document.getElementById('hero');
+hero.innerHTML = liquid(220, 'drop');
+const heroSvg = hero.querySelector('svg');
+let current = 'drop';
+let busy = false;
+let auto = true;
+
+async function show(shape) {
+  if (busy || shape === current) return;
+  busy = true;
+  document.getElementById('now').textContent = `${LABELS[shape][0]}: ${LABELS[shape][1]}`;
+  for (const b of document.querySelectorAll('.controls button')) b.setAttribute('aria-pressed', String(b.dataset.shape === shape));
+  await morph(heroSvg, current, shape);
+  current = shape;
+  busy = false;
+}
+
+const controls = document.getElementById('controls');
+controls.innerHTML = Object.keys(SHAPES).map((s) => `<button type="button" data-shape="${s}" aria-pressed="${s === 'drop'}">${LABELS[s][0]}</button>`).join('');
+controls.addEventListener('click', (e) => {
+  const b = e.target.closest('button');
+  if (!b) return;
+  auto = false;
+  show(b.dataset.shape);
+});
+
+// The demo: a gesture, back to the drop, the next gesture.
+const PLAY = ['palm', 'drop', 'ok', 'drop', 'pinch', 'drop', 'swipe', 'drop', 'fist', 'drop', 'shh', 'drop', 'shrug', 'drop', 'off', 'drop'];
+let pi = 0;
+setInterval(() => {
+  if (!auto) return;
+  show(PLAY[pi % PLAY.length]);
+  pi += 1;
+}, 1300);
+
+document.getElementById('frames').innerHTML = Object.keys(SHAPES).map((s) =>
+  `<div class="frame">${liquid(84, s)}<b>${LABELS[s][0]}</b><span>${LABELS[s][1]}</span></div>`).join('');
+
+document.getElementById('tab1').innerHTML = liquid(26, 'drop');
+document.getElementById('pill1').innerHTML = liquid(38, 'palm');
+document.getElementById('tab2').innerHTML = liquid(26, 'drop');
+document.getElementById('pill2').innerHTML = liquid(38, 'ok');
+</script>
+</body>
+</html>

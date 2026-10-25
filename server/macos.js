@@ -9,7 +9,7 @@
 // Nothing here writes. Every failure degrades to `null` rather than throwing:
 // a diagnostic that can take the server down is worse than no diagnostic.
 
-import { spawnSync } from 'node:child_process';
+import { execFile, spawnSync } from 'node:child_process';
 
 import { BINARY } from '../scripts/build-native.mjs';
 
@@ -33,6 +33,23 @@ export function windowServerSpaces() {
   } catch {
     return null;
   }
+}
+
+/**
+ * The same, without blocking: for watching a switch over a couple of seconds
+ * while the server keeps answering everything else.
+ */
+export function windowServerSpacesAsync() {
+  return new Promise((resolve) => {
+    execFile(BINARY, ['space', 'status'], { encoding: 'utf8' }, (error, stdout) => {
+      if (error) return resolve(null);
+      try {
+        resolve(JSON.parse(stdout));
+      } catch {
+        resolve(null);
+      }
+    });
+  });
 }
 
 /** Read a preferences domain as a plain object, or null if unreadable. */
@@ -73,10 +90,6 @@ export function readSpaces() {
     return null;
   }
 }
-
-/** A short string identifying which Space each display is on right now. */
-export const spaceFingerprint = (spaces) =>
-  (spaces ?? []).map((m) => `${m.display}:${m.current}`).join(' ');
 
 // Mission Control's "Move left/right a space", by symbolic hotkey id, with the
 // key each one carries by default. When these are off — or on but with no key

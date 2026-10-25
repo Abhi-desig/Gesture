@@ -8,17 +8,38 @@
 // rejected and the previous good config stays live. A half-applied mapping table
 // would be worse than a stale one.
 
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { DEFAULT_MAX_DISTANCE, isCustomGesture, CUSTOM_PREFIX } from '../public/custom-gestures.js';
 import { POSES } from '../public/gestures.js';
 import { DEFAULT_HOLD_MS } from '../public/recognizer.js';
+import { DEFAULT_SCREEN_OPTIONS } from '../public/screens.js';
 import { SWIPES } from '../public/swipe.js';
+import { MOVEMENTS } from '../public/transitions.js';
 import { BACKEND_NAMES } from './backends/index.js';
 import { formatShortcut, parseShortcut } from './shortcut.js';
 
 /** Gesture names the browser page can actually emit. */
-export const KNOWN_GESTURES = [...POSES, ...SWIPES];
+export const KNOWN_GESTURES = [...POSES, ...SWIPES, ...MOVEMENTS];
+
+/** Gestures removed in v2, with what replaced them, so an old config says so. */
+const RETIRED = {
+  point: 'point was removed in the v2 gesture set: look at a screen and pinch instead ("pinch": "focus_screen")',
+};
+
+/** Built in, or taught on the page (`custom:<name>`, which the server can't list). */
+const isEmittable = (name) => KNOWN_GESTURES.includes(name) || isCustomGesture(name);
+
+/** Why a binding's name will never be emitted. */
+function neverEmitted(name) {
+  if (RETIRED[name]) return RETIRED[name];
+  if (name.startsWith(CUSTOM_PREFIX)) {
+    return `gesture "${name}" is not a valid taught-gesture name — use lowercase letters, digits and _, starting with a letter, like "custom:peace"`;
+  }
+  return `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}, or a taught gesture like "custom:peace"`;
+}
 
 const NUMBERS = {
   cooldownMs: { default: 1200, min: 0, max: 60000 },
@@ -32,6 +53,12 @@ const NUMBERS = {
   // above for why any of this is configurable rather than compiled in.
   dockSwipeVelocity: { default: 400, min: 1, max: 100000 },
   dockSwipeLingerMs: { default: 300, min: 0, max: 10000 },
+  // How close a hand must be to a taught gesture's samples to count, in palm
+  // lengths. See public/custom-gestures.js for how it's measured.
+  customMaxDistance: { default: DEFAULT_MAX_DISTANCE, min: 0.02, max: 2 },
+  // How far your head may turn from a screen's calibrated direction and still
+  // count as facing it, in the loose degrees public/screens.js measures.
+  screenMaxAngle: { default: DEFAULT_SCREEN_OPTIONS.maxAngle, min: 2, max: 90 },
 };
 
 const BOOLEANS = {
@@ -43,15 +70,23 @@ const BOOLEANS = {
   // whether the desktop actually moved. On by default: "the log says it fired
   // and nothing happened" is the single most expensive way to debug this.
   //
-  // It costs a short poll of the preferences domain, and only on ctrl+left and
-  // ctrl+right. A switch that works is detected on the first or second read; the
-  // full ~600ms wait is only paid when nothing moved, which is exactly the case
-  // worth spending it on.
+  // It costs a few reads of the active Space, every 250 ms for 2 s, and only for
+  // a desktop switch (space_left / space_right, ctrl+left / ctrl+right). It runs
+  // after the server has answered, so it delays nothing; a switch that failed is
+  // reported then, through the orb's feed.
   verifySpaceSwitch: true,
   // Hold a session event tap while posting the gesture. Both reference
   // implementations do; whether the WindowServer requires it is measured, not
   // assumed — `npm run probe:keysend -- --swipe-only`.
   dockSwipeWithTap: true,
+  // A short sound when a gesture lands, a low one when it doesn't. The window is
+  // normally hidden, so without this the only confirmation is the effect itself —
+  // and some effects, like a key the focused app ignores, have none.
+  feedbackSound: true,
+  // Screen actions move the mouse pointer onto the window they focus,
+  // so the next scroll lands where your attention went rather than on the
+  // screen you left.
+  screenMovesPointer: true,
 };
 
 /** Dock-swipe field layouts. See native/keysend.swift for what differs. */
@@ -72,6 +107,121 @@ export const SPACE_STRATEGIES = ['osascript', 'direct', 'dockswipe'];
 export const CLIENT_ACTIONS = ['toggle_armed'];
 
 const isClientAction = (combo) => CLIENT_ACTIONS.includes(combo);
+
+/**
+ * Bindings that act on *a screen* rather than pressing a key.
+ *
+ * A key press is the same wherever you are looking. These are not: the page
+ * sends the display you were facing along with the gesture, and the server
+ * focuses that screen's front window. See public/screens.js.
+ *
+ * Like client actions they never reach a keyboard backend, so a backend that
+ * cannot express them is not thereby unsuitable.
+ */
+export const SCREEN_ACTIONS = ['focus_screen'];
+
+const isScreenAction = (combo) => SCREEN_ACTIONS.includes(combo);
+
+/**
+ * What the page may set a gesture to, from the Gestures view.
+ *
+ * A list rather than any shortcut, and that is the safety boundary, not a
+ * convenience. The wire was designed so that the worst a compromised page could
+ * do is trigger something you had already bound. Free-form editing from the
+ * page would undo that in one request — bind a gesture to any key, then fire
+ * it. With a list, the most it can do is pick between these. Any other
+ * shortcut still works; it just has to be written into config.json by hand.
+ */
+export const EDITABLE_ACTIONS = [
+  'audio_play',
+  'audio_next',
+  'audio_prev',
+  'audio_mute',
+  'audio_vol_up',
+  'audio_vol_down',
+  'space_left',
+  'space_right',
+  'ctrl+up',
+  'cmd+ctrl+q',
+  'focus_screen',
+  'toggle_armed',
+  // Office tasks. Zoom's two only reach Zoom from another app once its
+  // "Enable Global Shortcut" box is ticked for each.
+  'pagedown',
+  'pageup',
+  'cmd+shift+a',
+  'cmd+shift+v',
+  'right',
+  'left',
+];
+
+/** A short fingerprint of config.json, so an edit can tell the file moved under it. */
+export function configVersion(text) {
+  return createHash('sha256').update(text).digest('hex').slice(0, 16);
+}
+
+/**
+ * Apply binding changes from the page to a parsed config.json.
+ *
+ * Only the `gestures` block changes; every other setting is carried over as it
+ * was. A shortcut already in the file that the edit leaves alone stays, even
+ * if it is not on the list — the list limits what the page can *choose*, not
+ * what you can write yourself.
+ *
+ * @param {object} raw The parsed config.json.
+ * @param {Record<string, string|null>} edits Gesture name -> action, or null to unbind.
+ * @returns {{raw: object}|{errors: string[]}} The new config, still to be run
+ *   through validate().
+ */
+export function applyBindingEdit(raw, edits) {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { errors: ['config.json must be a JSON object'] };
+  }
+  if (typeof raw.gestures !== 'object' || raw.gestures === null || Array.isArray(raw.gestures)) {
+    return {
+      errors: [
+        'config.json uses the short form, without a "gestures" block — move the bindings into "gestures": { … } to change them here',
+      ],
+    };
+  }
+  if (typeof edits !== 'object' || edits === null || Array.isArray(edits) || Object.keys(edits).length === 0) {
+    return { errors: ['nothing to change'] };
+  }
+
+  const errors = [];
+  const gestures = { ...raw.gestures };
+  for (const [name, combo] of Object.entries(edits)) {
+    if (!isEmittable(name)) {
+      errors.push(neverEmitted(name));
+    } else if (combo === null) {
+      delete gestures[name];
+    } else if (typeof combo !== 'string') {
+      errors.push(`"${name}" must be set to an action, or to null to unbind it`);
+    } else if (combo !== raw.gestures[name] && !EDITABLE_ACTIONS.includes(combo)) {
+      errors.push(
+        `"${combo}" can't be chosen here — pick one of the listed actions, or write any other shortcut into config.json by hand`,
+      );
+    } else {
+      gestures[name] = combo;
+    }
+  }
+  return errors.length > 0 ? { errors } : { raw: { ...raw, gestures } };
+}
+
+/**
+ * Write config.json without ever leaving it half-written: a temporary file
+ * beside it, then a rename over the original, which is atomic on one disk. The
+ * watcher then reloads it like any other save.
+ *
+ * @returns {Promise<string>} The text written.
+ */
+export async function writeConfig(filePath, raw) {
+  const text = `${JSON.stringify(raw, null, 2)}\n`;
+  const tmp = `${filePath}.tmp`;
+  await fs.promises.writeFile(tmp, text);
+  await fs.promises.rename(tmp, filePath);
+  return text;
+}
 
 /**
  * Which CGEventSource state table the native helper attributes its events to.
@@ -146,8 +296,12 @@ function validateHoldMs(raw, errors) {
       errors.push(`"holdMs.${key}" must be a number between ${HOLD_MS_LIMITS.min} and ${HOLD_MS_LIMITS.max}`);
       continue;
     }
-    if (key !== 'default' && !KNOWN_GESTURES.includes(key)) {
-      errors.push(`"holdMs.${key}" is not a gesture — expected "default" or one of ${KNOWN_GESTURES.join(', ')}`);
+    if (key !== 'default' && key !== 'custom' && !isEmittable(key)) {
+      errors.push(
+        RETIRED[key]
+          ? `"holdMs.${key}": ${RETIRED[key]}`
+          : `"holdMs.${key}" is not a gesture — expected "default", "custom", a taught gesture, or one of ${KNOWN_GESTURES.join(', ')}`,
+      );
       continue;
     }
     out[key] = ms;
@@ -264,11 +418,12 @@ export function validate(raw) {
     // run through the key parser, which would reject it as an unknown key.
     if (isClientAction(combo)) {
       gestures[name] = { combo, client: true };
-      if (!KNOWN_GESTURES.includes(name)) {
-        warnings.push(
-          `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}`,
-        );
-      }
+      if (!isEmittable(name)) warnings.push(neverEmitted(name));
+      continue;
+    }
+    if (isScreenAction(combo)) {
+      gestures[name] = { combo, screen: true };
+      if (!isEmittable(name)) warnings.push(neverEmitted(name));
       continue;
     }
 
@@ -286,11 +441,7 @@ export function validate(raw) {
     } catch (err) {
       errors.push(`gesture "${name}": ${err.message}`);
     }
-    if (!KNOWN_GESTURES.includes(name)) {
-      warnings.push(
-        `gesture "${name}" is bound but never emitted — expected one of ${KNOWN_GESTURES.join(', ')}`,
-      );
-    }
+    if (!isEmittable(name)) warnings.push(neverEmitted(name));
   }
 
   if (Object.keys(gestures).length === 0 && errors.length === 0) {
@@ -333,6 +484,8 @@ export class ConfigStore {
     for (const warning of next.warnings) this.log(`config warning: ${warning}`);
 
     this.current = next;
+    // Kept so the page can say which version of the file it is editing.
+    this.version = configVersion(text);
     return next;
   }
 
@@ -391,7 +544,15 @@ export class ConfigStore {
       // So the page can tell a binding it must perform itself from one the
       // server will press, without hardcoding the list in two places.
       clientActions: CLIENT_ACTIONS,
+      // Same reason: the page has to know which gestures need a screen sent
+      // with them.
+      screenActions: SCREEN_ACTIONS,
+      // For the Gestures view: what it may offer, and which file version an
+      // edit is based on, so a hand edit made meanwhile is never overwritten.
+      editableActions: EDITABLE_ACTIONS,
+      version: this.version,
       dryRun: settings.dryRun,
+      feedbackSound: settings.feedbackSound,
       tuning: {
         holdMs: settings.holdMs,
         cooldownMs: settings.cooldownMs,
@@ -403,6 +564,8 @@ export class ConfigStore {
         swipeMaxVerticalRatio: settings.swipeMaxVerticalRatio,
         swipeRearmRequiresPoseBreak: settings.swipeRearmRequiresPoseBreak,
         invertSwipeDirection: settings.invertSwipeDirection,
+        customMaxDistance: settings.customMaxDistance,
+        screenMaxAngle: settings.screenMaxAngle,
       },
     };
   }

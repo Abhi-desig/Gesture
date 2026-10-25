@@ -20,7 +20,8 @@
 // app.js owns only I/O (camera, canvas, fetch); every decision lives here, which
 // keeps the interactions above testable without a camera.
 
-import { classifyPose, isFourFingerPose } from './gestures.js';
+import { isCustomGesture } from './custom-gestures.js';
+import { classifyPose, isFourFingerPose, isShh } from './gestures.js';
 import { SwipeTracker } from './swipe.js';
 
 /**
@@ -37,8 +38,16 @@ import { SwipeTracker } from './swipe.js';
  * a comfortable fist, raising your hand to swipe fires open_palm first, which by
  * default locks the screen. open_palm therefore wants a deliberate hold, long
  * enough that merely getting ready never reaches it.
+ *
+ * `custom` covers every taught gesture. Longer than a built-in pose because a
+ * nearest-neighbour match is a looser judgement than a geometric rule, so it is
+ * made to prove itself for longer before it presses anything.
+ *
+ * `ok_sign` arms and disarms, so it is held half a second: long enough that a
+ * hand passing through the shape doesn't flip arming, short enough not to feel
+ * like waiting.
  */
-export const DEFAULT_HOLD_MS = { default: 180, open_palm: 1200 };
+export const DEFAULT_HOLD_MS = { default: 180, open_palm: 1200, ok_sign: 500, shh: 400, custom: 400 };
 
 // A floor so that on a very slow camera a single frame can't satisfy a hold.
 const MIN_FRAMES = 2;
@@ -56,12 +65,38 @@ export const DEFAULT_TUNING = {
   invertSwipeDirection: false,
 };
 
+// A pose that drops out for less than this is still held. One frame of a pinch
+// reading as nothing, or a twitch through the stillness gate, is flicker, not
+// letting go: counting it as a release made a flickering pinch fire twice, and
+// a flickering OK sign arm and then disarm.
+export const RELEASE_MS = 150;
+
 export class Recognizer {
   constructor(tuning = {}) {
     this.tracker = new SwipeTracker();
     this.tuning = { ...DEFAULT_TUNING };
+    this.customClassifier = null;
+    this.mouth = null;
     this.setTuning(tuning);
     this.reset();
+  }
+
+  /**
+   * Where the mouth is, from the face model, or null without a recent face.
+   * Only "shh" uses it: with no mouth, there is no shh.
+   */
+  setMouth(mouth) {
+    this.mouth = mouth ?? null;
+  }
+
+  /**
+   * Taught gestures, consulted only when no built-in pose matches.
+   *
+   * @param {((pts: {x:number,y:number}[]) => string|null)|null} classify Returns a
+   *   `custom:` gesture name, or null.
+   */
+  setCustomClassifier(classify) {
+    this.customClassifier = typeof classify === 'function' ? classify : null;
   }
 
   setTuning(tuning = {}) {
@@ -82,16 +117,27 @@ export class Recognizer {
     // The current continuous run of one pose. One fire per run when
     // requireReleaseBetweenFires is on, which is what stops a held fist from
     // re-firing every cooldown window.
-    this.run = { pose: null, frames: 0, fired: false, startedAt: 0 };
+    this.run = { pose: null, frames: 0, fired: false, startedAt: 0, lastSeenAt: 0, other: null };
     this.lastFired = new Map();
     this.poseSuppressed = false;
+  }
+
+  /**
+   * The page refused a gesture that fired (a pinch while facing no screen):
+   * give back its cooldown, so the next attempt needn't wait. It still has to
+   * be let go and made again, or a held pinch would refuse on every frame.
+   */
+  forgive(pose) {
+    this.lastFired.delete(pose);
   }
 
   /** Hold time required for one pose, honouring per-gesture overrides. */
   holdFor(pose) {
     const hold = this.tuning.holdMs;
     if (typeof hold === 'number') return hold;
-    return hold?.[pose] ?? hold?.default ?? DEFAULT_HOLD_MS.default;
+    if (hold?.[pose] !== undefined) return hold[pose];
+    if (isCustomGesture(pose)) return hold?.custom ?? DEFAULT_HOLD_MS.custom;
+    return hold?.default ?? DEFAULT_HOLD_MS.default;
   }
 
   /**
@@ -130,16 +176,58 @@ export class Recognizer {
 
     // Stillness gate: a moving hand is a swipe candidate, not a held pose.
     const still = motion.velocity <= this.tuning.stillnessMaxVelocity;
-    const pose = still && !this.poseSuppressed ? classifyPose(pts) : null;
+    const gated = still && !this.poseSuppressed;
+    const pose = gated ? this.#classify(pts, motion) : null;
+
+    // The hand's shape whatever it is doing. Firing still waits for stillness,
+    // but anything following the shape over time — closing an open hand, which
+    // moves a little as it closes — must not lose it just because the hand
+    // drifted. Built-in poses only while
+    // moving: a taught gesture is a nearest-neighbour judgement, too loose to
+    // trust on a moving hand, so it is never asked there.
+    const shape = gated ? pose : this.#builtIn(pts);
 
     const gesture = this.#advanceRun(pose, now, canFire);
-    return this.#view({ handPresent: true, motion, gesture, now });
+    return this.#view({ handPresent: true, motion, gesture, shape, now });
+  }
+
+  /**
+   * Built-in poses first, then taught gestures.
+   *
+   * A taught gesture never runs while four fingers are out: that is how every
+   * swipe starts, so a match there would fire while you were getting ready to
+   * change desktops — the same collision open_palm has, with no hold time tuned
+   * to stop it.
+   */
+  #classify(pts, motion) {
+    const builtIn = this.#builtIn(pts);
+    if (builtIn || !this.customClassifier || motion.fourFinger) return builtIn;
+    return this.customClassifier(pts) ?? null;
+  }
+
+  /** The hand alone, or "shh" when the mouth is known and the finger is on it. */
+  #builtIn(pts) {
+    return isShh(pts, this.mouth) ? 'shh' : classifyPose(pts);
   }
 
   /** Track the pose run and decide whether it should fire. */
   #advanceRun(pose, now = 0, canFire = true) {
-    if (pose !== this.run.pose) this.run = { pose, frames: 0, fired: false, startedAt: now };
-    this.run.frames += 1;
+    const run = this.run;
+    if (pose === run.pose) {
+      run.frames += 1;
+      run.lastSeenAt = now;
+      run.other = null;
+      run.dropped = false;
+    } else if (run.pose && now - run.lastSeenAt < RELEASE_MS) {
+      // Maybe flicker: hold the run. Note when something else began, so a real
+      // change of pose still times its hold from its own first frame.
+      run.other = pose && run.other?.pose !== pose ? { pose, at: now } : pose ? run.other : null;
+      run.dropped = true;
+      return null;
+    } else {
+      const startedAt = pose && run.other?.pose === pose ? run.other.at : now;
+      this.run = { pose, frames: 1, fired: false, startedAt, lastSeenAt: now, other: null, dropped: false };
+    }
 
     if (!pose) return null;
     if (this.run.frames < MIN_FRAMES) return null;
@@ -167,22 +255,23 @@ export class Recognizer {
     return pose;
   }
 
-  #view({ handPresent, motion, gesture = null, now = 0 }) {
+  #view({ handPresent, motion, gesture = null, shape = null, now = 0 }) {
     return {
       gesture,
       handPresent,
-      pose: this.run.pose,
+      // This frame's pose: none during a dropout, though the run behind it is kept.
+      pose: this.run.dropped ? null : this.run.pose,
+      shape,
       frames: this.run.frames,
-      heldMs: this.run.pose ? Math.max(0, now - this.run.startedAt) : 0,
-      holdMs: this.run.pose ? this.holdFor(this.run.pose) : 0,
+      heldMs: this.run.pose && !this.run.dropped ? Math.max(0, now - this.run.startedAt) : 0,
+      holdMs: this.run.pose && !this.run.dropped ? this.holdFor(this.run.pose) : 0,
       fired: this.run.fired,
       velocity: motion?.velocity ?? 0,
       fourFinger: motion?.fourFinger ?? false,
       swipeArmed: this.tracker.armed,
       poseSuppressed: this.poseSuppressed,
+      // Why the last up/down flick did or didn't scroll (diagnostics only).
+      flick: this.tracker.lastFlick ?? null,
     };
   }
 }
-
-/** Convenience for tests: does this pose gate swipes? */
-export { isFourFingerPose };

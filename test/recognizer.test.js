@@ -315,3 +315,124 @@ test('a boolean canFire still works', () => {
   }
   assert.deepEqual(fired, ['fist']);
 });
+
+// ---------------------------------------------------------------- taught gestures
+
+const teachPeace = (recognizer, calls = []) => {
+  recognizer.setCustomClassifier((pts) => {
+    calls.push(pts);
+    return 'custom:peace';
+  });
+  return calls;
+};
+
+test('a taught gesture fires after the longer custom hold, not the built-in one', () => {
+  const r = new Recognizer();
+  teachPeace(r);
+  assert.deepEqual(run(r, hold({ pose: 'peace', ms: 250 })), [], '250ms is past 180 but short of 400');
+
+  const r2 = new Recognizer();
+  teachPeace(r2);
+  assert.deepEqual(run(r2, hold({ pose: 'peace', ms: 500 })), ['custom:peace']);
+});
+
+test('built-in poses win, and taught gestures are never asked while four fingers are out', () => {
+  // A taught match during the four-finger pose would fire while you were getting
+  // ready to swipe — the same collision open_palm has with swipes.
+  const r = new Recognizer();
+  const calls = teachPeace(r);
+  assert.deepEqual(run(r, hold({ pose: 'fist', ms: 500 })), ['fist']);
+  run(r, hold({ pose: 'four_finger', ms: 500 }));
+  assert.equal(calls.length, 0);
+});
+
+test('a taught shape swept across the frame does not fire', () => {
+  // Only the first frame is classified: speed is unknown until there are two.
+  // After that the stillness gate holds every pose back, taught ones included.
+  const r = new Recognizer();
+  const calls = teachPeace(r);
+  const fired = run(r, motionStream({ pose: 'peace', dx: RIGHTWARD }));
+  assert.ok(!fired.includes('custom:peace'));
+  assert.ok(calls.length <= 1, `consulted on ${calls.length} moving frames`);
+});
+
+test('holdMs can set every taught gesture, or one by name', () => {
+  const all = new Recognizer({ holdMs: { default: 180, custom: 100 } });
+  assert.equal(all.holdFor('custom:peace'), 100);
+
+  const one = new Recognizer({ holdMs: { default: 180, 'custom:peace': 900 } });
+  assert.equal(one.holdFor('custom:peace'), 900);
+  assert.equal(one.holdFor('custom:other'), 400, 'falls back to the custom default');
+  assert.equal(one.holdFor('fist'), 180, 'built-ins are unaffected');
+});
+
+test('the OK sign fires after its own longer hold', () => {
+  // It arms and disarms, so a hand passing through the shape must not flip it.
+  assert.deepEqual(run(new Recognizer(), hold({ pose: 'ok_sign', ms: 350 })), []);
+  assert.deepEqual(run(new Recognizer(), hold({ pose: 'ok_sign', ms: 650 })), ['ok_sign']);
+});
+
+test('shh fires after its hold, and only while the mouth is known', () => {
+  const pts = buildHand({ pose: 'point' });
+  // On the index finger's top section: the lips under a "shh".
+  const mouth = { x: (pts[6].x + pts[8].x) / 2, y: (pts[6].y + pts[8].y) / 2 };
+
+  const withFace = new Recognizer();
+  withFace.setMouth(mouth);
+  assert.deepEqual(run(withFace, hold({ pose: 'point', ms: 300 })), []);
+  withFace.reset();
+  assert.deepEqual(run(withFace, hold({ pose: 'point', ms: 500 })), ['shh']);
+
+  const noFace = new Recognizer();
+  noFace.setMouth(null);
+  assert.deepEqual(run(noFace, hold({ pose: 'point', ms: 500 })), [], 'no face, no shh');
+});
+
+test('a forgiven gesture needn\'t wait out its cooldown, but must still be let go', () => {
+  const r = new Recognizer();
+  const fired = run(r, hold({ pose: 'pinch', ms: 300 }));
+  assert.deepEqual(fired, ['pinch']);
+  r.forgive('pinch');
+  // Still held: no repeat, or a refused pinch would refuse on every frame.
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 300, startT: 1400 })), []);
+  // Let go for longer than a flicker (RELEASE_MS), and pinch again at once,
+  // well inside the 1.2 s cooldown.
+  run(r, hold({ pose: 'open_palm', ms: 200, startT: 1750 }));
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 300, startT: 2000 })), ['pinch']);
+});
+
+test('a pose flickering out for a frame or two is still held, not made twice', () => {
+  const r = new Recognizer();
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 300 })), ['pinch']);
+  // No cooldown in the way: only the release rule can stop a second fire.
+  r.forgive('pinch');
+  // 100 ms of something else, then the pinch again: flicker, not a release.
+  run(r, hold({ pose: 'open_palm', ms: 100, startT: 1317 }));
+  assert.deepEqual(run(r, hold({ pose: 'pinch', ms: 1500, startT: 1434 })), []);
+});
+
+test('a real change of pose still times its hold from its own first frame', () => {
+  const r = new Recognizer();
+  run(r, hold({ pose: 'open_palm', ms: 300 }));
+  // A fist from 1317 ms fires once its 180 ms hold is up, not 150 ms later.
+  const fired = [];
+  for (const { pts, t } of hold({ pose: 'fist', ms: 400, startT: 1317 })) {
+    if (r.update(pts, t).gesture) fired.push(t);
+  }
+  assert.equal(fired.length, 1);
+  assert.ok(fired[0] <= 1317 + 180 + 50, `fired at ${fired[0]} ms`);
+});
+
+test('a moving hand still reports its shape, though it fires nothing', () => {
+  // "Close your hand" watches the shape, not the gated pose: the hand moves a
+  // little as it closes, and the open-then-fist change must still be seen.
+  const r = new Recognizer();
+  const views = motionStream({ pose: 'pinch', dx: RIGHTWARD }).map(({ pts, t }) => r.update(pts, t));
+  const moving = views.filter((v) => v.velocity > r.tuning.stillnessMaxVelocity);
+  assert.ok(moving.length > 0, 'the stream should move fast enough to gate poses');
+  for (const v of moving) {
+    assert.equal(v.pose, null);
+    assert.equal(v.shape, 'pinch');
+  }
+  assert.deepEqual(views.filter((v) => v.gesture), []);
+});

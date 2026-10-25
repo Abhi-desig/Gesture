@@ -1,6 +1,6 @@
 #!/usr/bin/env node
-// Vendor MediaPipe locally: the hand landmarker model, the tasks-vision bundles
-// and the WASM runtime.
+// Vendor MediaPipe locally: the hand and face landmarker models, the
+// tasks-vision bundles and the WASM runtime.
 //
 // Not just a download convenience. detector-worker.js runs `importScripts()` on
 // the tasks-vision bundle *inside the worker that holds raw camera VideoFrames*,
@@ -23,12 +23,22 @@ const CDN = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${TASKS_VISION
 const MODEL_URL =
   'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task';
 
+// For screen actions, which need to know which way your head is turned.
+const FACE_MODEL_URL =
+  'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task';
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const PUBLIC = path.join(ROOT, 'public');
+
+// For the Lab's vanish effect: which pixels are you. Landscape, for 16:9 webcams.
+const SEGMENT_MODEL_URL =
+  'https://storage.googleapis.com/mediapipe-models/image_segmenter/selfie_segmenter_landscape/float16/1/selfie_segmenter_landscape.tflite';
 
 /** @type {{url: string, dest: string, note?: string}[]} */
 const ASSETS = [
   { url: MODEL_URL, dest: 'models/hand_landmarker.task' },
+  { url: FACE_MODEL_URL, dest: 'models/face_landmarker.task' },
+  { url: SEGMENT_MODEL_URL, dest: 'models/selfie_segmenter_landscape.tflite' },
 
   // Two builds of the same library, and both are needed: the page imports the
   // ESM one, while the worker has to importScripts the UMD one — the ESM build

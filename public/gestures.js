@@ -4,6 +4,7 @@
 // gestures (swipes) live in swipe.js, which is stateful by necessity.
 
 import {
+  LANDMARK,
   extendedFingers,
   handScale,
   indexReach,
@@ -29,14 +30,64 @@ export const DEFAULT_THRESHOLDS = {
   palmMinSpread: 0.6,
 };
 
-export const POSES = ['pinch', 'open_palm', 'fist'];
+// The OK sign is "yes" in a mid-air TV gesture study (Dim et al., DIS '16),
+// and arms Gesture. Point was removed in v2: it fired nothing in its first
+// live test, and looking at a screen plus a pinch does its job.
+//
+// `shh` is the one pose that needs the face as well as the hand, so
+// classifyPose never returns it; isShh() below does, given the mouth.
+export const POSES = ['ok_sign', 'pinch', 'open_palm', 'fist', 'shh'];
+
+export const SHH_THRESHOLDS = {
+  // The lips must be this close to the index finger's top section (middle joint
+  // to tip), in palm lengths. Measured to the section rather than the tip
+  // because a finger laid across the lips often has its tip at the nose.
+  maxDistance: 0.4,
+};
+
+/**
+ * "Shh": the index finger alone, upright, laid on the lips. Mutes the mic.
+ *
+ * A common gesture, but no study found tests it for mute, and it is cultural,
+ * so it is a candidate that has to earn its place in the check-up.
+ *
+ * Not rotation-invariant, on purpose: an index finger pointing sideways near
+ * the mouth is a hand resting on the chin, not a "shh".
+ *
+ * @param {{x:number,y:number}[]} pts Aspect-corrected hand points.
+ * @param {{x:number,y:number}|null} mouth The lip centre, in the same units
+ *   (mouthPoint() in screens.js), or null with no face in view.
+ */
+export function isShh(pts, mouth, thresholds = {}) {
+  if (!pts || pts.length < 21 || !mouth) return false;
+  const t = { ...SHH_THRESHOLDS, ...thresholds };
+  const f = extendedFingers(pts);
+  if (!f.index || f.middle || f.ring || f.pinky) return false;
+
+  // Upright: the finger points up the image, within 45° of vertical.
+  const tip = pts[LANDMARK.INDEX_TIP];
+  const pip = pts[LANDMARK.INDEX_PIP];
+  const dx = tip.x - pip.x;
+  const dy = tip.y - pip.y;
+  if (dy >= 0 || Math.abs(dx) > Math.abs(dy)) return false;
+
+  return distToSegment(mouth, pip, tip) / handScale(pts) <= t.maxDistance;
+}
+
+function distToSegment(p, a, b) {
+  const vx = b.x - a.x;
+  const vy = b.y - a.y;
+  const len2 = vx * vx + vy * vy;
+  const k = len2 > 0 ? Math.min(1, Math.max(0, ((p.x - a.x) * vx + (p.y - a.y) * vy) / len2)) : 0;
+  return Math.hypot(p.x - (a.x + k * vx), p.y - (a.y + k * vy));
+}
 
 /**
  * Classify a static pose.
  *
  * @param {{x:number,y:number}[]} pts Aspect-corrected points from `toPoints`.
  * @param {object} [thresholds]
- * @returns {'pinch'|'open_palm'|'fist'|null}
+ * @returns {'ok_sign'|'pinch'|'open_palm'|'fist'|null}
  */
 export function classifyPose(pts, thresholds = {}) {
   if (!pts || pts.length < 21) return null;
@@ -47,9 +98,15 @@ export function classifyPose(pts, thresholds = {}) {
   const gap = pinchGap(pts, scale);
   const reach = indexReach(pts, scale);
 
-  // Order matters: most specific first. A pinch also satisfies the fist test
-  // (its index finger reads as curled), so pinch has to be checked before fist
-  // or it would never be reachable.
+  // Order matters: most specific first.
+  // - The OK sign is a pinch with the other three fingers up, so it would read
+  //   as a pinch if pinch came first.
+  // - A pinch also satisfies the fist test (its index finger reads as curled),
+  //   so pinch has to be checked before fist or it would never be reachable.
+  if (gap < t.pinchMaxGap && fingers.middle && fingers.ring && fingers.pinky) {
+    return 'ok_sign';
+  }
+
   if (gap < t.pinchMaxGap && reach > t.pinchMinIndexReach) {
     return 'pinch';
   }
@@ -63,6 +120,21 @@ export function classifyPose(pts, thresholds = {}) {
   }
 
   return null;
+}
+
+/**
+ * Which of the four fingers are out, as a fixed-width string: `'I--P'` is
+ * index and pinky (horns), `'IM--'` a peace sign, `'----'` a fist.
+ *
+ * For measuring shapes that are not gestures yet. The check-up uses it to try
+ * candidate poses on real hands before either is built in, and to log what the
+ * camera actually saw when a pose was missed. Thumb deliberately left out, for
+ * the same reason it never decides a pose here.
+ */
+export function fingerPattern(pts) {
+  if (!pts || pts.length < 21) return null;
+  const f = extendedFingers(pts);
+  return `${f.index ? 'I' : '-'}${f.middle ? 'M' : '-'}${f.ring ? 'R' : '-'}${f.pinky ? 'P' : '-'}`;
 }
 
 /**

@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Gesture mascot</title>
+<style>
+  :root { --bg: #f5f6f8; --panel: #fff; --text: #1d2026; --dim: #6b7280; --line: #e3e5ea;
+    --body: #fdfdfc; --ink: #1d2026; --ring: #2563d9; --live: #17924a; --warn: #a8650b; }
+  @media (prefers-color-scheme: dark) { :root { --bg: #111317; --panel: #1a1d22; --text: #e8eaee;
+    --dim: #9aa1ab; --line: #2a2e35; --body: #262a31; --ink: #e8eaee; --ring: #6ea8fe; --live: #46d17f; --warn: #f0b45f; } }
+  body { margin: 0; padding: 24px 16px 48px; background: var(--bg); color: var(--text);
+    font: 14px/1.5 system-ui, -apple-system, sans-serif; }
+  main { max-width: 960px; margin: 0 auto; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  h2 { font-size: 13px; letter-spacing: .06em; text-transform: uppercase; color: var(--dim); margin: 28px 0 10px; }
+  p { color: var(--dim); margin: 0 0 8px; max-width: 70ch; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 14px 10px 10px;
+    display: grid; justify-items: center; gap: 8px; text-align: center; }
+  .card b { font-size: 13px; } .card span { font-size: 12px; color: var(--dim); }
+  .sizes { display: flex; align-items: end; gap: 28px; flex-wrap: wrap; background: var(--panel);
+    border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .menubar { display: flex; gap: 14px; align-items: center; padding: 3px 12px; border-radius: 6px; }
+  .menubar.light { background: #ececec; color: #000; } .menubar.dark { background: #2b2b2b; color: #fff; }
+  .mono { --body: transparent; --ink: currentColor; --ring: currentColor; --live: currentColor; --warn: currentColor; }
+  .lbl { font-size: 12px; color: var(--dim); display: block; margin-top: 6px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Gesture mascot</h1>
+  <p>A round blob with two small mitten hands that appear only during reactions, and a fingerprint ring
+    that fills while you hold a gesture. The design is from docs/MASCOT-REACTIONS.md.</p>
+
+  <h2>Sizes</h2>
+  <div class="sizes" id="sizes"></div>
+
+  <h2>States</h2>
+  <div class="grid" id="states"></div>
+
+  <h2>Reactions (about 0.5 s each, key frame shown)</h2>
+  <div class="grid" id="reactions"></div>
+</main>
+
+<script>
+// One drawing, many poses. Part ids follow docs/MASCOT.md so the page header
+// can use the same SVG: m-ring, m-face, m-body, m-eye-l/r, m-pupil-l/r, m-lid,
+// m-mouth, plus the new m-brows and m-hand-l/r.
+function mascot(o = {}) {
+  const {
+    size = 96, ring = 0, ringColor = 'var(--ring)', lids = 0, gx = 0, gy = 0,
+    eyes = 'open', mouth = 'smile', brows = null, hands = null, tilt = 0, dy = 0, wink = false,
+  } = o;
+  const px = gx * 1.2, py = gy * 1.2;
+  // Fingerprint ring: three broken concentric arcs, the outer one fills with `ring`.
+  // At menu-bar size the fingerprint lines turn to mush: the face alone reads better.
+  const arcs = size <= 20 ? '' : [14.6, 13.4].map((r, i) =>
+    `<circle cx="16" cy="16.5" r="${r}" fill="none" stroke="var(--ink)" stroke-opacity="${i ? .18 : .28}"
+      stroke-width=".7" stroke-linecap="round" stroke-dasharray="${i ? '5 1.6 9 1.6' : '7 1.8 3 1.8 12 1.8'}"
+      transform="rotate(${i ? 40 : -20} 16 16.5)"/>`).join('');
+  const fill = ring > 0 ? `<circle id="m-ring" cx="16" cy="16.5" r="14.6" fill="none" stroke="${ringColor}"
+      stroke-width="1.4" stroke-linecap="round" pathLength="100" stroke-dasharray="${ring * 100} 100"
+      transform="rotate(-90 16 16.5)"/>` : '';
+  const eye = (cx, side) => {
+    if (eyes === 'closed' || (wink && side === 'r'))
+      return `<path d="M${cx - 2.6} 15.2 Q${cx} 16.9 ${cx + 2.6} 15.2" stroke="var(--ink)" stroke-width="1.3" fill="none" stroke-linecap="round"/>`;
+    if (eyes === 'happy')
+      return `<path d="M${cx - 2.6} 15.8 Q${cx} 13 ${cx + 2.6} 15.8" stroke="var(--ink)" stroke-width="1.3" fill="none" stroke-linecap="round"/>`;
+    const lid = side === 'r' && lids < 0 ? -lids : Math.max(0, lids);
+    return `<g id="m-eye-${side}">
+      <ellipse class="m-white" cx="${cx}" cy="15" rx="3.3" ry="3.9" fill="var(--body)" stroke="var(--ink)" stroke-width="1.1"/>
+      <circle id="m-pupil-${side}" cx="${cx + px}" cy="${15.4 + py}" r="1.9" fill="var(--ink)"/>
+      ${lid ? `<g class="m-lid"><rect x="${cx - 3.5}" y="10.6" width="7" height="${4.4 * lid + .4}" fill="var(--body)"/>
+        <path d="M${cx - 3.2} ${11 + 4.4 * lid} H${cx + 3.2}" stroke="var(--ink)" stroke-width="1.2" stroke-linecap="round"/></g>` : ''}
+    </g>`;
+  };
+  const mouths = {
+    smile: '<path id="m-mouth" d="M13.8 21 Q16 22.6 18.2 21" stroke="var(--ink)" stroke-width="1.1" fill="none" stroke-linecap="round"/>',
+    flat: '<path id="m-mouth" d="M14.2 21.4 H17.8" stroke="var(--ink)" stroke-width="1.1" stroke-linecap="round"/>',
+    o: '<ellipse id="m-mouth" cx="16" cy="21.6" rx="1.2" ry="1.4" fill="var(--ink)"/>',
+    none: '',
+    yawn: '<ellipse id="m-mouth" cx="16" cy="21.8" rx="1.6" ry="1.9" fill="var(--ink)"/>',
+  };
+  const browSets = {
+    up: '<path d="M9.6 9.6 Q12 8.4 14.2 9.4 M17.8 9.4 Q20 8.4 22.4 9.6" stroke="var(--ink)" stroke-width="1" fill="none" stroke-linecap="round"/>',
+    tilt: '<path d="M9.6 9.2 L14 10 M18 9.4 Q20.2 8.6 22.4 9.8" stroke="var(--ink)" stroke-width="1" fill="none" stroke-linecap="round"/>',
+  };
+  const mitt = (x, y, r = 0) => `<g transform="translate(${x} ${y}) rotate(${r})">
+      <rect x="-2.3" y="-2.6" width="4.6" height="5.2" rx="2.3" fill="var(--body)" stroke="var(--ink)" stroke-width="1.1"/>
+      <path d="M-2.2 -0.2 Q-3.6 -0.6 -3.2 -2" stroke="var(--ink)" stroke-width="1.1" fill="var(--body)" stroke-linecap="round"/></g>`;
+  const handSets = {
+    sides: `<g id="m-hand-l">${mitt(4.6, 21, 20)}</g><g id="m-hand-r">${mitt(27.4, 21, -20)}</g>`,
+    shh: `<g id="m-hand-r"><rect x="15.2" y="17.6" width="1.6" height="6.4" rx=".8" fill="var(--body)" stroke="var(--ink)" stroke-width="1"/>${mitt(16, 25.4)}</g>`,
+    peek: `<g id="m-hand-l">${mitt(12, 15.2, 10)}</g><g id="m-hand-r">${mitt(20, 15.2, -10)}</g>`,
+    shrug: `<g id="m-hand-l">${mitt(4.2, 15, -30)}</g><g id="m-hand-r">${mitt(27.8, 15, 30)}</g>`,
+    ok: `<g id="m-hand-r"><circle cx="27.4" cy="18" r="2.1" fill="none" stroke="var(--ink)" stroke-width="1.1"/>
+         <path d="M28.6 16.2 V12.6 M29.8 16.8 V13.6" stroke="var(--ink)" stroke-width="1.1" stroke-linecap="round"/></g>`,
+    pinch: `<g id="m-hand-r"><path d="M25.6 18.4 Q27.8 15.6 29.6 18.2 Q27.6 19.6 25.6 18.4Z" fill="var(--body)" stroke="var(--ink)" stroke-width="1.1"/>
+         <circle cx="27.6" cy="16" r=".7" fill="var(--ink)"/></g>`,
+    beat: '<text x="24.5" y="9" font-size="5" fill="var(--ink)">♪</text>',
+  };
+  return `<svg width="${size}" height="${size}" viewBox="0 0 32 32" role="img" aria-hidden="true">
+    ${arcs}${fill}
+    <g id="m-face" transform="translate(0 ${dy}) rotate(${tilt} 16 17)">
+      <circle id="m-body" cx="16" cy="16.5" r="11.6" fill="var(--body)" stroke="var(--ink)" stroke-width="1.3"/>
+      ${brows ? browSets[brows] : ''}
+      ${eye(12.2, 'l')}${eye(19.8, 'r')}
+      ${mouths[mouth]}
+      ${hands ? handSets[hands] : ''}
+    </g></svg>`;
+}
+
+const card = (title, sub, o) =>
+  `<div class="card">${mascot(o)}<b>${title}</b><span>${sub}</span></div>`;
+
+document.getElementById('sizes').innerHTML = `
+  <div>${mascot({ size: 128, ring: .6 })}<span class="lbl">128 px, holding a gesture</span></div>
+  <div>${mascot({ size: 32 })}<span class="lbl">32 px, page header</span></div>
+  <div><div class="menubar light mono">${mascot({ size: 18 })}${mascot({ size: 18, eyes: 'closed' })}${mascot({ size: 18, eyes: 'happy' })}</div>
+       <div class="menubar dark mono" style="margin-top:6px">${mascot({ size: 18 })}${mascot({ size: 18, eyes: 'closed' })}${mascot({ size: 18, eyes: 'happy' })}</div>
+       <span class="lbl">18 pt menu bar, one colour: awake · asleep · nod</span></div>`;
+
+document.getElementById('states').innerHTML = [
+  card('Awake', 'base pose', {}),
+  card('Asleep', 'disarmed', { eyes: 'closed', mouth: 'flat' }),
+  card('Watching', 'hand in view', { brows: 'up' }),
+  card('Holding', 'ring fills', { ring: .6 }),
+  card('Looking right', 'facing the right screen', { gx: 1 }),
+  card('Away', 'facing no screen', { lids: .45, gy: 1, mouth: 'flat' }),
+  card('Learning', 'calibrating', { gy: -1, gx: .5, mouth: 'flat' }),
+  card('Still', 'check-up running', { mouth: 'flat' }),
+].join('');
+
+document.getElementById('reactions').innerHTML = [
+  card('OK sign → armed', 'eyes pop, OK wink', { wink: true, hands: 'ok', brows: 'up' }),
+  card('OK sign → disarmed', 'yawn', { lids: .6, mouth: 'yawn' }),
+  card('Look + pinch', 'pinch-spark', { gx: 1, hands: 'pinch' }),
+  card('Close hand → play', 'bobs to a beat', { eyes: 'happy', hands: 'beat', dy: -1 }),
+  card('Close hand → pause', 'freezes', { mouth: 'flat', brows: 'up' }),
+  card('Swipe left / right', 'slides out, back in', { gx: -1, tilt: -10 }),
+  card('Swipe up / down', 'eyes scroll', { gy: 1 }),
+  card('Cover camera', 'peekaboo', { hands: 'peek', mouth: 'smile' }),
+  card('Shh → mute', 'finger on lips', { hands: 'shh', mouth: 'none' }),
+  card('Snap', 'gasp', { brows: 'up', mouth: 'o' }),
+  card('Worked', 'nod', { eyes: 'happy', dy: 1 }),
+  card('Refused', 'shrug', { hands: 'shrug', brows: 'tilt', lids: -.5, tilt: 8, mouth: 'flat' }),
+].join('');
+</script>
+</body>
+</html>
