@@ -270,6 +270,18 @@ Worker → main thread:
 | `error` | `message`, `fatal`. Fatal stops the camera; non-fatal is rate-limited into the log |
 | `stopped` | the loop exited |
 
+**After sleep.** Closing the lid locks the screen, and about 15 s later Chrome
+suspends the camera, firing `mute`, then `unmute` on unlock
+([Chromium, 2021](https://groups.google.com/g/discuss-webrtc/c/X46ua1nCR3Y/m/nQbxX0JmCAAJ)).
+A closed lid can also end the track, or stop frames with no event at all. In
+the desktop app, an ended track or the stall watchdog calls `recoverCamera()`,
+which restarts the camera through `followCamera()`: the orb is told
+"starting", and a failed start is tried again after 1, 2, 4, then every 10 s
+while the orb still wants the camera, since it may not be back yet, or the
+screen may still be locked. Before this, an ended track was only logged, and
+the watchdog's single restart could fail straight after a wake and never try
+again, while the orb still thought the camera was on.
+
 A deliberate subtlety: **timestamps are taken on the main thread**, not accepted
 from the worker. A Worker has its own `performance.timeOrigin`, so its
 `performance.now()` is a different clock; mixing the two made staleness detection
@@ -800,6 +812,15 @@ processes running: the server and the engine.
   the places Node is installed, so `Command::new("node")` works from a terminal
   and silently fails from a double-click. It checks the usual install locations,
   then PATH; `GESTURE_NODE` overrides.
+- **Finding the project.** `GESTURE_ROOT`, then the bundle's resources, then
+  the folders above the app (a bundle still inside the repo), then the folder
+  the app was built from (`CARGO_MANIFEST_DIR`). The last is what lets a copy
+  in `/Applications` run on the Mac that built it.
+- **Start at Login** is a LaunchAgent holding the app's path at the moment it
+  was switched on. An installed (release) app writes it again at each start,
+  so a moved or replaced app heals it; `tauri dev` doesn't, or logging in
+  would start a dev build. (One pointed at `~/gesture` after the project moved
+  to `~/code/gesture`, and nothing started at login.)
 - **Orphan protection.** The child is told the parent's pid and exits on its own
   if the app is force-killed — `RunEvent::Exit` cannot cover a SIGKILL, and an
   orphan holding port 4321 has its permissions attributed to a dead app.

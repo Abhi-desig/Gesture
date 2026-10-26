@@ -70,6 +70,16 @@ npm run app:dev     # run it
 npm run app:build   # produce Gesture.app
 ```
 
+**To have it start with your Mac,** build it from the project folder you
+keep (`~/code/gesture`), copy
+`src-tauri/target/release/bundle/macos/Gesture.app` to `/Applications`,
+open it once, and turn on **Start at Login** from the orb's right-click menu.
+The installed app runs its server from the folder it was built in, so keep
+that folder. It also needs Accessibility of its own (System Settings →
+Privacy & Security → Accessibility), since the grant is per app and
+`npm run app:dev` borrows the terminal's. Quit it before
+`npm run app:dev`, or there will be two orbs.
+
 Needs a Rust toolchain (<https://rustup.rs>), Google Chrome and Apple's
 Command Line Tools (for Swift: the orb's island is SwiftUI) on top of the
 normal setup. The first time you click the orb, Chrome asks for the camera in
@@ -112,7 +122,13 @@ engine and capabilities.
   firing with it hidden.** Right-click → **Settings** brings that window
   forward.
 - **Start at Login**, reflecting the LaunchAgent's real state rather than a
-  stored preference.
+  stored preference. An installed app rewrites the LaunchAgent with its own
+  path each time it starts, so moving or replacing the app doesn't leave it
+  pointing at nothing.
+- **After sleep the camera comes back on its own.** Closing the lid locks the
+  screen and Chrome suspends the camera; it can also end the camera outright.
+  Jelly says "Waking up…" and the camera is tried again, more slowly each
+  time, until it is back or you click the orb off.
 - **Quit Gesture** exits, quits the hidden Chrome, and kills the server it
   started. The server also watches its parent and exits on its own if the app
   is force-killed, so no orphan is left holding port 4321.

@@ -91,15 +91,20 @@ fn find_project_root(app: &tauri::AppHandle) -> Option<PathBuf> {
     // Deep enough to escape a dev bundle, whose exe sits eight directories
     // inside the repo: src-tauri/target/release/bundle/macos/Gesture.app/
     // Contents/MacOS/gesture.
-    let exe = std::env::current_exe().ok()?;
-    let mut dir = exe.parent()?.to_path_buf();
-    for _ in 0..10 {
-        if dir.join("server/index.js").is_file() {
-            return Some(dir);
+    if let Some(mut dir) = std::env::current_exe().ok().and_then(|exe| exe.parent().map(Path::to_path_buf)) {
+        for _ in 0..10 {
+            if dir.join("server/index.js").is_file() {
+                return Some(dir);
+            }
+            let Some(parent) = dir.parent() else { break };
+            dir = parent.to_path_buf();
         }
-        dir = dir.parent()?.to_path_buf();
     }
-    None
+
+    // An app copied to /Applications has neither: use the project it was
+    // built from, which on the Mac that built it is still there.
+    let built_from = Path::new(env!("CARGO_MANIFEST_DIR")).parent()?;
+    built_from.join("server/index.js").is_file().then(|| built_from.to_path_buf())
 }
 
 /// Find a Node binary the way a *GUI* process has to.
@@ -984,6 +989,16 @@ pub fn run() {
         })
         .setup(|app| {
             let handle = app.handle().clone();
+            // The login item records the app's path when it is switched on, so
+            // a moved or replaced app leaves it pointing at nothing. An
+            // installed app writes its own path again each time it starts;
+            // `tauri dev` doesn't, or logging in would start a dev build.
+            #[cfg(not(debug_assertions))]
+            if app.autolaunch().is_enabled().unwrap_or(false) {
+                if let Err(err) = app.autolaunch().enable() {
+                    eprintln!("gesture: could not update the login item ({err})");
+                }
+            }
             *app.state::<ServerProcess>().0.lock().unwrap() = start_server(&handle);
 
             // The orb loads its page from the server, and the engine connects
