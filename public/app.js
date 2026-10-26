@@ -644,6 +644,22 @@ async function cameraNeedsPermission() {
   }
 }
 
+// After the Mac sleeps the camera can take a while to come back: the device
+// returns with the lid, and Chrome holds it while the screen is still locked.
+// So a camera that was running is tried again, more slowly each time, for as
+// long as the orb still wants it. Clicking the orb off stops it.
+const RECOVERY_DELAYS_MS = [1000, 2000, 4000, 10_000];
+const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Bring back a camera the system took away, through followCamera(), which tells the orb. */
+function recoverCamera(why) {
+  if (!ENGINE || state.recovering || !engineWant) return;
+  state.recovering = true;
+  logEntry(`${why} — restarting the camera`, 'note');
+  stopCamera();
+  followCamera();
+}
+
 /**
  * Start or stop the camera until it matches engineWant.
  *
@@ -655,11 +671,18 @@ async function followCamera() {
   if (engineBusy) return;
   engineBusy = true;
   try {
+    let attempt = 0;
     while (engineWant !== state.cameraOn) {
       if (engineWant) {
         reportCamera((await cameraNeedsPermission()) ? 'needs-permission' : 'starting');
         const result = await startCamera();
         if (!result.ok) {
+          // A camera lost to sleep may just not be back yet.
+          if (state.recovering && !result.blocked) {
+            await pause(RECOVERY_DELAYS_MS[Math.min(attempt++, RECOVERY_DELAYS_MS.length - 1)]);
+            if (!engineWant) reportCamera('off');
+            continue;
+          }
           engineWant = false;
           reportCamera(result.blocked ? 'blocked' : 'failed', result.message);
           break;
@@ -672,6 +695,10 @@ async function followCamera() {
     }
   } finally {
     engineBusy = false;
+    if (state.recovering) {
+      state.recovering = false;
+      updateReadout();
+    }
   }
 }
 
@@ -2223,6 +2250,9 @@ function teardownDetection() {
 function watchTrack(track, label) {
   track.addEventListener('ended', () => {
     logEntry(`camera track (${label}) ended`, 'failed');
+    // Ended by the system, as when the lid closes: stop() fires no event, so
+    // this was never us.
+    recoverCamera(`camera track (${label}) ended`);
   });
   track.addEventListener('mute', () => {
     state.cameraMuted = true;
@@ -2501,6 +2531,12 @@ async function superviseDetection() {
   if (msSinceFrame() < STALL_MS) return;
 
   recoveryAttempted = true;
+  // In the desktop app the restart goes through the orb's camera, which keeps
+  // trying until the camera is back, and tells the orb meanwhile.
+  if (ENGINE) {
+    recoverCamera(`no frames for ${Math.round(msSinceFrame())}ms`);
+    return;
+  }
   state.recovering = true;
   logEntry(`no frames for ${Math.round(msSinceFrame())}ms — restarting the camera`, 'note');
   updateReadout();
