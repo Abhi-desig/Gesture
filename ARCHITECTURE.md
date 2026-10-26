@@ -769,6 +769,68 @@ Space changed by any other route, and cannot tell "never moved" from "moved and
 snapped back". Everything here reads `CGSGetActiveSpace` instead —
 `native/build/keysend space status` prints it as JSON and needs no permission.
 
+`space_left` and `space_right` are actions, not key chords: `cmd+space_right`
+is rejected at config load, because there is no chord to modify.
+
+### The dock-swipe fallback
+
+`spaceStrategy: "dockswipe"` posts the trackpad's **dock-swipe gesture**, the
+way Mac Mouse Fix and BetterTouchTool do it:
+
+```bash
+native/build/keysend swipe right --verbose
+```
+
+Three `kCGSEventDockControl` events (phases began / changed / ended), **each
+followed by a companion `kCGSEventGesture` event**, posted to the *session* tap
+— not the HID tap where key events go in. Both the pairing and the tap are
+required; a lone dock event on the HID tap is silently ignored, which is the
+easiest way to write this and have it do nothing.
+
+Two field layouts ship, because the two known-good implementations disagree and
+neither is documentation:
+
+| `--variant` | Field 119 | Field 135 encoding | Exit velocity |
+| --- | --- | --- | --- |
+| `iss` (default) | `0` | float bits as **int32** | X only |
+| `mmf` | `FLT_TRUE_MIN` | float bits as **uint32** | X and Y |
+
+Neither reference posts a dock swipe from a short-lived process: both are daemons
+holding a session event tap. `dockSwipeWithTap` and `dockSwipeLingerMs` exist so
+this helper can match that, because a one-shot that posts and exits microseconds
+later is measurably not the same thing. `dockSwipeVelocity` is the flick's exit
+speed: too low and the Dock rubber-bands back.
+
+`npm run probe:keysend -- --swipe-only` sweeps the configurations and reports
+which moved the desktop.
+
+The field indices are undocumented and reverse-engineered — stable in practice
+but not API, and Apple moved the payload layout again in the macOS 27 betas
+(where a serialized IOHID blob in field 4205 is needed instead). Treat this as
+one backend among several, never as the only way the app can act.
+
+### `keysendSource`
+
+Emitting a `flagsChanged` is necessary but not sufficient — it also has to land
+in a state table the WindowServer consults. A `CGEventSource` created with
+`.privateState` has a table nobody else reads, which could satisfy the focused
+application and still be invisible to Mission Control: the same shape of bug as
+libnut's flag bit, one level up. So the table is a setting, defaulting to `hid`
+(`.hidSystemState`, what real hardware uses), and `npm run probe:keysend`
+measures which one actually moves a Space on your machine.
+
+The probe sends the chord every way there is — nut.js two ways, the Swift helper
+once per `keysendSource`, and `osascript` as a baseline — and prints a
+plain-language verdict naming the value to pin in `config.json`. It picks the
+direction with room to move each time, walks the desktop back where it found
+it, and refuses to run without Accessibility, since macOS would discard every
+attempt silently and each would read as a false negative. Run it from the same
+app you start the server from: the grant follows that app, not `node`.
+
+`backend: "auto"` skips any backend that cannot express one of your actual
+bindings, so `osascript` is passed over while a media key is bound, rather than
+failing once per press.
+
 ### `native/keysend.swift`
 
 ```
