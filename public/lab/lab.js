@@ -94,6 +94,8 @@ export function createLab(deps) {
     rendererError: null,
     segmenter: null,
     segmenterState: 'idle', // 'idle' | 'loading' | 'ready' | 'failed'
+    // Bumped on close, so a load that finishes after the Lab closed lets go.
+    segmenterLoad: 0,
     hasMask: false,
     // Someone is in the latest mask: with nobody there, Vanish does nothing.
     personInView: false,
@@ -211,14 +213,21 @@ export function createLab(deps) {
   async function ensureSegmenter() {
     if (lab.segmenterState !== 'idle') return;
     lab.segmenterState = 'loading';
+    const load = lab.segmenterLoad;
     renderReadout(true);
     try {
       const assets = await deps.resolveAssets();
       const model = (await deps.exists(LOCAL_SEGMENT_MODEL_URL)) ? LOCAL_SEGMENT_MODEL_URL : CDN_SEGMENT_MODEL_URL;
-      lab.segmenter = await deps.oneAtATime(() => Segmenter.create({ esm: assets.esm, wasm: assets.wasm, model }));
+      const segmenter = await deps.oneAtATime(() => Segmenter.create({ esm: assets.esm, wasm: assets.wasm, model }));
+      if (load !== lab.segmenterLoad) {
+        segmenter.close();
+        return;
+      }
+      lab.segmenter = segmenter;
       lab.segmenterState = 'ready';
       deps.log(`Lab: person cutout ready (${lab.segmenter.delegate})`, 'note');
     } catch (err) {
+      if (load !== lab.segmenterLoad) return;
       lab.segmenterState = 'failed';
       setStatus(`The person cutout didn't load: ${err.message}`, 'failed');
     }
@@ -573,6 +582,7 @@ export function createLab(deps) {
       lab.segmenter?.close();
       lab.segmenter = null;
       lab.segmenterState = 'idle';
+      lab.segmenterLoad += 1;
     },
 
     /** The camera started or stopped. */

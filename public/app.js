@@ -472,20 +472,32 @@ function setDiagnostics(open) {
   if (open) el.diagnosticsClose.focus();
 }
 
+/**
+ * The Lab runs only while it is on screen. Gestures don't fire while it runs,
+ * so a Lab left open in a hidden window would stop them with nobody looking.
+ */
+function labWanted() {
+  return parseRoute(location.hash) === 'lab' && !document.hidden;
+}
+
+function syncLab() {
+  const want = labWanted();
+  if (want === Boolean(lab?.isOpen)) return;
+  if (want) cancelCheckup('the Lab was opened');
+  // A pose held across the switch either way must not fire the moment you
+  // arrive or leave.
+  recognizer.reset();
+  grab.reset();
+  // Still wanted once it has loaded? You may have left while it did.
+  if (want) loadLab().then((loaded) => labWanted() && loaded.open());
+  else lab?.close();
+}
+
 /** Show the view the hash names, and remember it for the next visit. */
 function route() {
   const view = parseRoute(location.hash);
   showView(view);
-  // Gestures don't fire in the Lab, and a pose held across the switch either
-  // way must not fire the moment you arrive or leave.
-  if ((view === 'lab') !== Boolean(lab?.isOpen)) {
-    if (view === 'lab') cancelCheckup('the Lab was opened');
-    recognizer.reset();
-    grab.reset();
-    // Still the Lab once it has loaded? You may have left while it did.
-    if (view === 'lab') loadLab().then((loaded) => parseRoute(location.hash) === 'lab' && loaded.open());
-    else lab?.close();
-  }
+  syncLab();
   // On a narrow window the tabs scroll sideways; keep the current one in view.
   document.querySelector(`[data-nav="${view}"]`)?.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   writeFlag('gesture.view', view);
@@ -700,6 +712,16 @@ async function followCamera() {
       updateReadout();
     }
   }
+}
+
+/**
+ * Turn the camera on from a button on the page. In the desktop app it goes the
+ * orb's way, so the orb never says "camera off" while the camera is on.
+ */
+function turnCameraOn() {
+  if (!ENGINE) return startCamera();
+  engineWant = true;
+  return followCamera();
 }
 
 function connectEngine(events) {
@@ -2119,7 +2141,10 @@ async function resolveAssets() {
   const vendored =
     (await exists(`${VENDOR_BASE}/vision_bundle.js`)) &&
     (await exists(`${VENDOR_BASE}/wasm/vision_wasm_internal.wasm`));
-  const base = vendored ? VENDOR_BASE : CDN_BASE;
+  // Absolute, because import() resolves a relative URL against the module that
+  // calls it, not the page: the Lab's cutout, in lab/, would ask for
+  // lab/vendor/.
+  const base = new URL(vendored ? VENDOR_BASE : CDN_BASE, location.href).href;
 
   return {
     vendored,
@@ -2673,7 +2698,7 @@ function loadLab() {
       oneAtATime,
       stream: () => el.video.srcObject,
       cameraDetail: setCameraDetail,
-      startCamera,
+      startCamera: turnCameraOn,
       voice,
       chime,
       postRecord,
@@ -2741,6 +2766,7 @@ document.addEventListener('visibilitychange', () => {
     if (document.hidden) el.video.pause();
     else el.video.play().catch(() => {});
   }
+  syncLab();
   updateReadout();
 });
 
