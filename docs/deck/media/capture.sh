@@ -1,13 +1,17 @@
 #!/bin/bash
-# Captures Mime's notch, and two short screen recordings, for the case study deck.
+# Captures Mime's notch, and the whole laptop screen, as sharp PNG stills for the
+# case study deck.
 #
-# Run it in Terminal, with the Terminal window on the laptop screen:
+# Before running:
+#   - set a bright wallpaper and close or hide every window on the laptop screen;
+#   - move this Terminal window to your second screen;
+#   - turn on Do Not Disturb, so no notification lands in a shot.
+# Then run, in Terminal:
 #   bash docs/deck/media/capture.sh
 #
-# It takes about a minute. What happens: Gesture restarts (for the greeting),
-# the camera turns on for a few seconds, the laptop screen switches desktop
-# once and back, and a Page Down and Page Up go to Terminal. The laptop screen
-# needs a second desktop for the switch (Mission Control, then +).
+# It takes about a minute. Gesture restarts (for the greeting), the camera turns
+# on for a few seconds, the second screen switches desktop once and back, and a
+# Page Down and Page Up go to Terminal.
 #
 # Gestures are fired the way the page's test buttons fire them: the server
 # presses the real key, then the page's "fired" event makes Jelly speak.
@@ -17,6 +21,7 @@ RAW="$HERE/raw"
 API=http://127.0.0.1:4321
 NOTCH="240,0,960,240" # top centre of the built-in screen, in points
 SEQ=$(( $(date +%s) % 100000 + 900000 ))
+rm -rf "$RAW" # the last run's captures go, so nothing old is mixed in
 mkdir -p "$RAW"
 
 post() { curl -s -m 5 -H 'Content-Type: application/json' -d "$2" "$API$1" >/dev/null; }
@@ -25,8 +30,11 @@ said() { # mood, text: the event the page posts after a gesture
   post /mascot "{\"mood\":\"$1\",\"gaze\":{\"x\":0,\"y\":0},\"label\":\"$2\",\"event\":{\"seq\":$SEQ,\"type\":\"fired\",\"text\":\"$2\"}}"
 }
 fire() { post /gesture "{\"gesture\":\"$1\"}"; said nod "$2"; }
-burst() { # name, count, seconds apart
+burst() { # name, count, seconds apart: the notch area
   for i in $(seq -w 1 "$2"); do screencapture -x -R"$NOTCH" "$RAW/$1-$i.png"; sleep "$3"; done
+}
+screen() { # name, count, seconds apart: the whole laptop screen
+  for i in $(seq -w 1 "$2"); do screencapture -x -D 1 "$RAW/$1-$i.png"; sleep "$3"; done
 }
 
 echo "1/7 Checking screen recording"
@@ -60,22 +68,19 @@ said asleep "OK sign → disarmed"
 burst 05d-sleep 8 0.25
 sleep 2
 
-echo "6/7 Recording a desktop switch"
-screencapture -v -V 7 -x "$RAW/13-desktop.mov" &
-sleep 1.5
+echo "6/7 A swipe: the whole laptop screen while Jelly speaks"
 fire swipe_left "Swipe left → next desktop"
-wait
+screen 01-screen 6 0.25
 sleep 1
 post /gesture '{"gesture":"swipe_right"}'
 sleep 2
 
-echo "7/7 Recording the spring: two gestures in a row"
-screencapture -v -V 6 -x "$RAW/16-springs.mov" &
-sleep 1.5
+echo "7/7 Two gestures in a row, for the spring"
+burst 16a-rest 2 0.3
 fire swipe_up "Swipe up → page down"
-sleep 0.7
+burst 16b-down 4 0.15
 fire swipe_down "Swipe down → page up"
-wait
+burst 16c-up 4 0.15
 
 post /camera '{"on":false}'
 echo "Done. $(ls "$RAW" | wc -l | tr -d ' ') files in $RAW"

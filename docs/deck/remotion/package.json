@@ -1,0 +1,24 @@
+{
+  "name": "mime-film",
+  "private": true,
+  "description": "The Mime case study film: motion graphics, your footage and a voice-over, in Remotion.",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render MimeFilm out/mime-film.mp4",
+    "voiceover": "node --strip-types generate-voiceover.ts",
+    "split-voiceover": "node --strip-types split-voiceover.ts"
+  },
+  "dependencies": {
+    "@remotion/cli": "4.0.540",
+    "@remotion/fonts": "4.0.540",
+    "@remotion/media": "4.0.540",
+    "@remotion/transitions": "4.0.540",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "4.0.540"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "typescript": "^5.6.0"
+  }
+}
